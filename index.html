@@ -115,6 +115,34 @@
   section { padding: 12px 20px; }
   .more > section + section, .more > details { border-top: 1px solid var(--line); }
 
+  /* ---------- address search ---------- */
+  .search { position: relative; margin: 8px 20px 2px; }
+  .search input {
+    width: 100%; min-height: 48px; border-radius: 24px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink); font: inherit; font-size: 16px; /* 16px stops iOS zooming in */
+    padding: 0 46px 0 46px;
+  }
+  .search input::placeholder { color: var(--muted); opacity: 1; }
+  .search input:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+  .search-icon { position: absolute; left: 14px; top: 12px; width: 24px; height: 24px; color: var(--muted); pointer-events: none; }
+  .search-clear {
+    position: absolute; right: 4px; top: 2px; width: 44px; height: 44px; border: 0; border-radius: 22px;
+    background: none; color: var(--muted); font-size: 24px; line-height: 1; cursor: pointer;
+  }
+  .suggestions {
+    position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 1300;
+    list-style: none; margin: 0; padding: 6px 0; max-height: min(360px, 55dvh); overflow-y: auto;
+    background: var(--panel); border-radius: 14px; box-shadow: var(--shadow);
+  }
+  .suggestions li { padding: 10px 16px; cursor: pointer; min-height: 48px; }
+  .suggestions li[aria-selected="true"], .suggestions li:hover { background: var(--bg); }
+  .suggestions li[aria-selected="true"] { box-shadow: inset 4px 0 0 var(--accent); }
+  .suggestions .main { display: block; font-weight: 500; }
+  .suggestions .sub { display: block; color: var(--muted); font-size: 14px; }
+  .suggestions .msg { color: var(--muted); cursor: default; }
+  .place-pin { background: none; border: 0; }
+  .place-pin svg { width: 100%; height: 100%; display: block; overflow: visible; filter: drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
+
   /* ---------- buttons ---------- */
   button, select { font: inherit; color: inherit; }
   .btn {
@@ -302,6 +330,14 @@
     section { padding: 12px 16px; }
     details.settings { padding: 0 16px; }
     .panel:not(.open) .more, .panel:not(.open) .credits { display: none; }
+    /* Search floats over the top of the map, like Google Maps */
+    .search {
+      position: fixed; z-index: 1100; margin: 0;
+      top: calc(10px + env(safe-area-inset-top, 0px));
+      left: calc(12px + env(safe-area-inset-left, 0px)); right: calc(12px + env(safe-area-inset-right, 0px));
+    }
+    .search input { background: var(--panel); border: 0; box-shadow: var(--shadow); }
+    .note { top: calc(70px + env(safe-area-inset-top, 0px)); }
     .status { font-size: 13px; }
     .credits { padding: 14px 16px 20px; }
   }
@@ -317,6 +353,17 @@
       <h1>LA Camera Watch</h1>
       <p class="status" id="status" role="status" aria-live="polite">Loading cameras…</p>
     </header>
+    <div class="search" role="search">
+      <label for="q" class="sr-only">Search for an address or place</label>
+      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19Zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9Z"/></svg>
+      <input id="q" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="q-list"
+        aria-describedby="q-hint" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"
+        placeholder="Search an address or place">
+      <button type="button" class="search-clear" id="q-clear" aria-label="Clear search" hidden>×</button>
+      <ul class="suggestions" id="q-list" role="listbox" aria-label="Address suggestions" hidden></ul>
+      <span class="sr-only" id="q-hint">Type 3 or more characters, then use the up and down arrows to pick a suggestion.</span>
+      <span class="sr-only" id="q-count" aria-live="polite"></span>
+    </div>
     <div class="actions">
       <button class="btn primary" id="btn-drive" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 11l1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11a2 2 0 0 1 2 2v4a1 1 0 0 1-1 1h-1v1.5a1.5 1.5 0 0 1-3 0V18H8v1.5a1.5 1.5 0 0 1-3 0V18H4a1 1 0 0 1-1-1v-4a2 2 0 0 1 2-2Zm2.1 0h9.8l-1.1-3.4a.9.9 0 0 0-.8-.6H9a.9.9 0 0 0-.8.6ZM6.5 15.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm11 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/></svg>
@@ -788,6 +835,7 @@ for (const key of ["voice", "chime", "vibrate", "big"]) {
 const LIST_MAX = 50;
 let listTimer = null, returnFocusKey = null;
 function refPoint() {
+  if (place && !driving) return { lat: place.lat, lon: place.lon, label: `from ${place.main}` };
   if (userPos) return { lat: userPos.lat, lon: userPos.lon, label: "from you" };
   const c = map.getCenter();
   return { lat: c.lat, lon: c.lng, label: "from map center" };
@@ -909,6 +957,7 @@ $("btn-locate").addEventListener("click", () => {
   if (!navigator.geolocation) return note("This browser can't share your location.");
   setStatus("Finding your location…");
   navigator.geolocation.getCurrentPosition(p => {
+    clearPlace();
     onFix(p);
     map.setView([userPos.lat, userPos.lon], 15, { animate: !reduceMotion });
     setStatus("Showing cameras near you");
@@ -919,6 +968,129 @@ $("btn-refresh").addEventListener("click", () => {
   note("");
   loadLive(map.getBounds());
 });
+
+// ---------- address search (Photon: OpenStreetMap geocoder that allows search-as-you-type) ----------
+const GEOCODER = "https://photon.komoot.io/api/";
+const NEARBY_M = 805;   // "near this address" means within half a mile
+let place = null, placeMarker = null, qTimer = null, qCtrl = null, qResults = [], qActive = -1;
+const qInput = $("q"), qList = $("q-list");
+
+function placeLabel(p) {
+  const street = [p.housenumber, p.street].filter(Boolean).join(" ");
+  const main = p.name || street || p.city || "Unnamed place";
+  const sub = [p.name && street, p.city || p.county, [p.state, p.postcode].filter(Boolean).join(" ")]
+    .filter(Boolean).filter(s => s !== main).join(", ");
+  return { main, sub };
+}
+async function geocode(text) {
+  if (qCtrl) qCtrl.abort();
+  qCtrl = new AbortController();
+  const c = map.getCenter();   // rank results near what you're looking at
+  const url = `${GEOCODER}?q=${encodeURIComponent(text)}&limit=6&lang=en&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}`;
+  const res = await fetch(url, { signal: qCtrl.signal });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const seen = new Set();
+  const results = (await res.json()).features.map(f => {
+    const { main, sub } = placeLabel(f.properties);
+    const [lon, lat] = f.geometry.coordinates;
+    return { main, sub, lat, lon, far: distM(c.lat, c.lng, lat, lon) > 150000 };
+  }).filter(r => { const k = r.main + "|" + r.sub; return !seen.has(k) && seen.add(k); });
+  return results.filter(r => !r.far).concat(results.filter(r => r.far));   // nearby places first
+}
+function setActive(i) {
+  qActive = i;
+  [...qList.children].forEach((li, j) => li.setAttribute("aria-selected", String(j === i)));
+  if (i >= 0 && qList.children[i]) {
+    qInput.setAttribute("aria-activedescendant", qList.children[i].id);
+    qList.children[i].scrollIntoView({ block: "nearest" });
+  } else qInput.removeAttribute("aria-activedescendant");
+}
+function showSuggestions(results, message) {
+  qResults = results;
+  qList.innerHTML = message ? `<li class="msg" role="option" aria-disabled="true" id="q-msg">${esc(message)}</li>`
+    : results.map((r, i) => `<li role="option" id="q-opt-${i}" aria-selected="false" data-i="${i}">
+        <span class="main">${esc(r.main)}</span>${r.sub ? `<span class="sub">${esc(r.sub)}</span>` : ""}</li>`).join("");
+  qList.hidden = false;
+  qInput.setAttribute("aria-expanded", "true");
+  $("q-count").textContent = message || `${results.length} suggestion${results.length === 1 ? "" : "s"}`;
+  setActive(-1);
+}
+function closeSuggestions() {
+  qList.hidden = true; qList.innerHTML = ""; qResults = [];
+  qInput.setAttribute("aria-expanded", "false");
+  setActive(-1);
+}
+async function runSearch(text, pickFirst = false) {
+  try {
+    const results = await geocode(text);
+    if (qInput.value.trim() !== text) return;   // you kept typing
+    if (!results.length) return showSuggestions([], "No matches. Try adding the city or ZIP code.");
+    if (pickFirst) choosePlace(results[0]); else showSuggestions(results);
+  } catch (e) {
+    if (e.name !== "AbortError") showSuggestions([], "Address search isn't responding. Try again in a moment.");
+  }
+}
+function pinIcon(label) {
+  return L.divIcon({ className: "place-pin", iconSize: [40, 52], iconAnchor: [20, 50], popupAnchor: [0, -46],
+    html: `<svg viewBox="0 0 40 52" aria-hidden="true"><path d="M20 2C10 2 2 9.8 2 19.6 2 33 20 50 20 50s18-17 18-30.4C38 9.8 30 2 20 2Z" fill="#c5221f" stroke="#fff" stroke-width="3"/><circle cx="20" cy="19.5" r="6.5" fill="#fff"/></svg>`
+      + `<span class="sr-only">Searched place: ${esc(label)}</span>` });
+}
+function nearbySummary(lat, lon) {
+  const near = cams.filter(c => settings[c.kind] && distM(lat, lon, c.lat, c.lon) <= NEARBY_M);
+  if (!near.length) return `No cameras within ${fmtDist(NEARBY_M)}`;
+  const parts = KINDS.map(k => [k, near.filter(c => c.kind === k).length]).filter(([, n]) => n)
+    .map(([k, n]) => `${n} ${n === 1 ? SPOKEN[k].toLowerCase() : PLURAL[k]}`);
+  return `${parts.join(", ")} within ${fmtDist(NEARBY_M)}`;
+}
+function choosePlace(r) {
+  place = r;
+  qInput.value = r.sub ? `${r.main}, ${r.sub}` : r.main;
+  $("q-clear").hidden = false;
+  closeSuggestions();
+  if (!placeMarker) placeMarker = L.marker([r.lat, r.lon], { keyboard: true, zIndexOffset: 1500 }).addTo(map);
+  placeMarker.setLatLng([r.lat, r.lon]).setIcon(pinIcon(r.main));
+  placeMarker.bindPopup(() => `<div class="pop"><h3>${esc(place.main)}</h3><p>${esc(place.sub || "")}</p>
+      <p><b>${esc(nearbySummary(place.lat, place.lon))}</b></p>
+      <p class="links"><a href="https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lon}" target="_blank" rel="noopener">Open in Google Maps</a></p></div>`);
+  map.setView([r.lat, r.lon], 16, { animate: !reduceMotion });
+  setStatus(`${r.main}: ${nearbySummary(r.lat, r.lon)}`);
+  renderList();
+}
+function clearPlace() {
+  place = null;
+  if (placeMarker) { map.removeLayer(placeMarker); placeMarker = null; }
+  qInput.value = ""; $("q-clear").hidden = true;
+  closeSuggestions();
+}
+
+qInput.addEventListener("input", () => {
+  const text = qInput.value.trim();
+  $("q-clear").hidden = !qInput.value;
+  clearTimeout(qTimer);
+  if (text.length < 3) return closeSuggestions();
+  qTimer = setTimeout(() => runSearch(text), 300);   // wait for a pause in typing
+});
+qInput.addEventListener("keydown", e => {
+  const n = qResults.length;
+  if (e.key === "ArrowDown" && n) { e.preventDefault(); setActive((qActive + 1) % n); }
+  else if (e.key === "ArrowUp" && n) { e.preventDefault(); setActive((qActive - 1 + n) % n); }
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    const text = qInput.value.trim();
+    if (qActive >= 0) choosePlace(qResults[qActive]);
+    else if (n) choosePlace(qResults[0]);
+    else if (text.length >= 2) { clearTimeout(qTimer); runSearch(text, true); }
+  } else if (e.key === "Escape") {
+    if (!qList.hidden) closeSuggestions(); else if (qInput.value) clearPlace();
+  }
+});
+qList.addEventListener("mousedown", e => e.preventDefault());   // keep focus in the box
+qList.addEventListener("click", e => {
+  const li = e.target.closest("li[data-i]");
+  if (li) choosePlace(qResults[+li.dataset.i]);
+});
+qInput.addEventListener("blur", () => setTimeout(closeSuggestions, 150));
+$("q-clear").addEventListener("click", () => { clearPlace(); renderList(); qInput.focus(); });
 
 // ---------- drive mode ----------
 let driving = false, follow = true, watchId = null, wakeLock = null, audioCtx = null;

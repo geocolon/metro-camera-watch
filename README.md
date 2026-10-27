@@ -7,6 +7,7 @@ A map of automated license plate readers (ALPR, such as Flock Safety) and speed 
 ## Features
 
 - **Camera icons you can tell apart without color.** Each type has its own shape and a camera symbol: plate readers are squares, speed cameras are circles, and LA city speed cameras are diamonds (solid when live, outline while under construction). Colors come from the Okabe-Ito palette, which stays distinct with common color blindness. A small pointer shows which way a camera faces when that's known.
+- **Address search.** Type an address or place, like Google Maps, and pick from the suggestions (arrow keys and Enter work too). A pin drops there, the status says how many cameras are within half a mile, and the camera list is sorted by distance from that address. Search uses [Photon](https://photon.komoot.io), OpenStreetMap's address search.
 - **Drive mode.** It follows your location and shows your speed, and inside LA's speed camera corridors it shows the posted limit. As you approach a camera, it plays a chime, says something like "Speed camera ahead, 950 feet", vibrates (Android) and shows a large banner. It only warns about cameras in your direction of travel, and gives more warning at higher speeds. It keeps the screen on while it runs.
 - **Phone-first layout.** There's a Google Maps-style bottom sheet and large touch targets. You can add it to your home screen to use it like an app (Share → Add to Home Screen on iPhone).
 - **Dark mode** follows your system setting.
