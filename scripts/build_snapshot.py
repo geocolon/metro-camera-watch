@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Build data/cameras.json: a snapshot of LA-area cameras that the map loads instantly.
+"""Build per-region camera snapshots that the map loads instantly.
 
-The free Overpass servers are often slow or busy, so the page starts from this
-snapshot (refreshed daily by .github/workflows/update-data.yml) and only asks
-Overpass live when you press "Refresh live" or browse outside the snapshot area.
+The free Overpass servers are often slow or busy, so the page starts from these
+snapshots (refreshed daily by .github/workflows/update-data.yml) and only asks
+Overpass live when you press "Refresh live data" or browse outside every region.
 
-    python3 scripts/build_snapshot.py
+    python3 scripts/build_snapshot.py            # every region
+    python3 scripts/build_snapshot.py ny         # just one
+
+Writes data/<region>.json for each region and data/regions.json, the list the
+page reads first. A region whose download fails keeps its previous file.
 
 Sources:
   OpenStreetMap via Overpass (ODbL): ALPR and speed camera nodes
-  LADOT Speed Safety System (public ArcGIS layers): camera sites and corridors
+  LADOT Speed Safety System (public ArcGIS layers): LA camera sites and corridors
+  (New York City doesn't publish its speed camera locations.)
 """
 import json
 import math
@@ -21,14 +26,18 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cameras_to_kml import build_query, overpass  # noqa: E402
 
-# south,west,north,east: Los Angeles County's populated area
-BBOX = (33.70, -118.95, 34.45, -117.65)
+# bbox is south, west, north, east
+REGIONS = {
+    "la": {"name": "Los Angeles area", "bbox": (33.70, -118.95, 34.45, -117.65), "ladot": True},
+    # NYC's five boroughs, Yonkers and lower Westchester, Long Island to Montauk, and nearby New Jersey
+    "ny": {"name": "New York City area", "bbox": (40.45, -74.35, 41.25, -71.80)},
+}
 ARCGIS = "https://services.arcgis.com/G3nmNsarwQblLhip/arcgis/rest/services"
 LADOT_CAMERAS = ARCGIS + "/CameraSystemLabels_view/FeatureServer/0"
 LADOT_CORRIDORS = ARCGIS + "/ApprovedLocations_04012026_view/FeatureServer/0"
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "cameras.json")
+DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 
-# OSM tags worth showing in the map's popups; everything else is dropped to keep the file small
+# OSM tags worth showing in the map's popups; everything else is dropped to keep the files small
 KEEP_TAGS = {
     "manufacturer", "brand", "operator", "direction", "camera:direction", "camera:mount",
     "surveillance:zone", "maxspeed", "name", "ref", "description", "note", "check_date",
@@ -79,17 +88,17 @@ def round_ring(ring):
     return [[round(x, 5), round(y, 5)] for x, y in ring]
 
 
-def main():
-    s, w, n, e = BBOX
-    print("Overpass: cameras in {},{},{},{}…".format(s, w, n, e))
+def osm_cameras(bbox):
     osm = []
-    for el in overpass(build_query("{},{},{},{}".format(s, w, n, e))):
+    for el in overpass(build_query("{},{},{},{}".format(*bbox))):
         tags = el.get("tags", {})
         kind = "alpr" if tags.get("surveillance:type") == "ALPR" else "speed"
         osm.append([el["id"], round(el["lat"], 6), round(el["lon"], 6), kind,
                     {k: v for k, v in tags.items() if k in KEEP_TAGS}])
+    return sorted(osm)
 
-    print("LADOT: camera sites and corridors…")
+
+def ladot_cameras():
     corridors = []
     for i, f in enumerate(get_geojson(LADOT_CORRIDORS)):
         p = f["properties"]
@@ -99,30 +108,75 @@ def main():
             "limit": p.get("speed_limi"), "school": p.get("SchoolNearby") == "Yes",
             "rings": [round_ring(r) for r in rings(f["geometry"])],
         })
-    ladot = []
+    city = []
     for f in get_geojson(LADOT_CAMERAS):
         pt = f["geometry"]["coordinates"]
         c = corridor_for(pt, corridors)
-        ladot.append({
+        city.append({
             "id": f["properties"].get("ID"), "lat": round(pt[1], 6), "lon": round(pt[0], 6),
             "status": f["properties"].get("System"),
             "corridor": c["id"] if c else None,
         })
+    return city, corridors
 
+
+def build(region_id):
+    region = REGIONS[region_id]
+    print("{}: asking Overpass for cameras…".format(region["name"]))
     snapshot = {
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "bbox": BBOX,
-        "osm": sorted(osm),
-        "ladot": ladot,
-        "corridors": corridors,
+        "bbox": region["bbox"],
+        "osm": osm_cameras(region["bbox"]),
+        "city": [],
+        "corridors": [],
     }
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "w", encoding="utf-8") as f:
+    if region.get("ladot"):
+        print("{}: LADOT camera sites and corridors…".format(region["name"]))
+        snapshot["city"], snapshot["corridors"] = ladot_cameras()
+    path = os.path.join(DATA, region_id + ".json")
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, separators=(",", ":"), ensure_ascii=False)
-    n_alpr = sum(1 for c in osm if c[3] == "alpr")
-    print("Wrote {}: {} ALPR, {} speed (OSM), {} LADOT sites, {} corridors ({:.0f} KB)".format(
-        os.path.normpath(OUT), n_alpr, len(osm) - n_alpr, len(ladot), len(corridors),
-        os.path.getsize(OUT) / 1024))
+    n_alpr = sum(1 for c in snapshot["osm"] if c[3] == "alpr")
+    print("Wrote {}: {} ALPR, {} speed (OSM), {} city sites ({:.0f} KB)".format(
+        os.path.normpath(path), n_alpr, len(snapshot["osm"]) - n_alpr, len(snapshot["city"]),
+        os.path.getsize(path) / 1024))
+
+
+def write_index():
+    """data/regions.json: every region that has a snapshot file, with its counts."""
+    index = []
+    for region_id, region in REGIONS.items():
+        path = os.path.join(DATA, region_id + ".json")
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            snap = json.load(f)
+        n_alpr = sum(1 for c in snap["osm"] if c[3] == "alpr")
+        index.append({
+            "id": region_id, "name": region["name"], "bbox": region["bbox"],
+            "file": "data/{}.json".format(region_id), "generated": snap["generated"],
+            "counts": {"alpr": n_alpr, "speed": len(snap["osm"]) - n_alpr, "city": len(snap["city"])},
+        })
+    with open(os.path.join(DATA, "regions.json"), "w", encoding="utf-8") as f:
+        json.dump(index, f, indent=1)
+
+
+def main():
+    wanted = sys.argv[1:] or list(REGIONS)
+    unknown = [r for r in wanted if r not in REGIONS]
+    if unknown:
+        sys.exit("Unknown region(s): {}. Choose from: {}".format(", ".join(unknown), ", ".join(REGIONS)))
+    os.makedirs(DATA, exist_ok=True)
+    failed = []
+    for region_id in wanted:
+        try:
+            build(region_id)
+        except Exception as e:  # keep the previous file and carry on with the other regions
+            print("{}: failed ({}); keeping the previous snapshot".format(region_id, e), file=sys.stderr)
+            failed.append(region_id)
+    write_index()
+    if len(failed) == len(wanted):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

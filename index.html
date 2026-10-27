@@ -52,7 +52,7 @@
     /* Okabe-Ito colors: distinguishable with protanopia, deuteranopia and tritanopia */
     --alpr: #0072B2;
     --speed: #E69F00;
-    --ladot: #CC79A7;
+    --city: #CC79A7;
     --font-ui: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-data: "Roboto Mono", ui-monospace, Menlo, Consolas, monospace;
     --inset-bottom: 0px;
@@ -396,10 +396,10 @@
             <span class="count" id="n-speed" aria-label="in view">0</span>
           </label>
           <label class="filter">
-            <input type="checkbox" id="lyr-ladot">
-            <span id="key-ladot" aria-hidden="true"></span>
-            <span class="name">LA city speed cameras<small>Diamond · solid is live, outline is coming soon</small></span>
-            <span class="count" id="n-ladot" aria-label="in view">0</span>
+            <input type="checkbox" id="lyr-city">
+            <span id="key-city" aria-hidden="true"></span>
+            <span class="name">City speed cameras<small>Diamond · official city data, LA for now · solid is live, outline is coming soon</small></span>
+            <span class="count" id="n-city" aria-label="in view">0</span>
           </label>
         </div>
       </section>
@@ -490,17 +490,17 @@ const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.private.coffee/api/interpreter",
 ];
-const SNAPSHOT_URL = "data/cameras.json";
+const REGIONS_URL = "data/regions.json";
 const LADOT_PAGE = "https://ladot.lacity.gov/speed-safety-system";
 const MIN_ZOOM_FOR_QUERY = 11;        // keep live queries small and polite
 const REQUEST_TIMEOUT_MS = 45 * 1000; // per mirror, then try the next one
 const START = { lat: 34.05, lon: -118.30, zoom: 12 };
-const KINDS = ["alpr", "speed", "ladot"];
+const KINDS = ["alpr", "speed", "city"];
 // Okabe-Ito palette; the glyph color on each is picked for contrast (white on blue, black on orange/pink)
-const COLORS = { alpr: "#0072B2", speed: "#E69F00", ladot: "#CC79A7" };
-const GLYPH = { alpr: "#ffffff", speed: "#000000", ladot: "#000000" };
-const PLURAL = { alpr: "license plate readers", speed: "speed cameras", ladot: "LA city speed cameras" };
-const SPOKEN = { alpr: "License plate reader", speed: "Speed camera", ladot: "City speed camera" };
+const COLORS = { alpr: "#0072B2", speed: "#E69F00", city: "#CC79A7" };
+const GLYPH = { alpr: "#ffffff", speed: "#000000", city: "#000000" };
+const PLURAL = { alpr: "license plate readers", speed: "speed cameras", city: "city speed cameras" };
+const SPOKEN = { alpr: "License plate reader", speed: "Speed camera", city: "City speed camera" };
 const LADOT_STATUS = { "Warning Live": "Live (warning period)", "Under Construction": "Under construction" };
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const phone = matchMedia("(max-width: 760px)");
@@ -515,8 +515,9 @@ function note(html) { $("note").hidden = !html; $("note-text").innerHTML = html 
 const clock = () => new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
 const settings = Object.assign(
-  { alpr: true, speed: true, ladot: true, alertDist: 300, voice: true, chime: true, vibrate: true, big: false, units: "imperial" },
+  { alpr: true, speed: true, city: true, alertDist: 300, voice: true, chime: true, vibrate: true, big: false, units: "imperial" },
   recall("cam-settings") || {});
+if ("ladot" in settings) { settings.city = settings.ladot; delete settings.ladot; }   // older saved settings
 const saveSettings = () => store("cam-settings", settings);
 
 // ---------- geometry ----------
@@ -570,9 +571,9 @@ function shapeSvg(kind, live = true) {
     : `<path d="M32 10 54 32 32 54 10 32Z" fill="#fff" stroke="${c}" stroke-width="5" stroke-linejoin="round"/>`;
 }
 function glyphSvg(kind, live = true) {
-  const ink = kind === "ladot" && !live ? "#6d2a57" : GLYPH[kind];
-  const hole = kind === "ladot" && !live ? "#fff" : COLORS[kind];
-  const s = kind === "ladot" ? 0.82 : 1;   // the diamond has less room inside
+  const ink = kind === "city" && !live ? "#6d2a57" : GLYPH[kind];
+  const hole = kind === "city" && !live ? "#fff" : COLORS[kind];
+  const s = kind === "city" ? 0.82 : 1;   // the diamond has less room inside
   return `<g transform="translate(32 32) scale(${s}) translate(-32 -32)" fill="${ink}">
     <rect x="21" y="25" width="22" height="15" rx="3"/><rect x="27" y="21.5" width="10" height="5" rx="1.5"/>
     <circle cx="32" cy="32.5" r="5" fill="${hole}"/><circle cx="32" cy="32.5" r="2.2"/></g>`;
@@ -592,7 +593,7 @@ function camIcon(cam) {
   const key = `${cam.kind}|${cam.live}|${cam.dirs.join(",")}|${size}|${cam.title}`;
   if (!iconCache.has(key)) iconCache.set(key, L.divIcon({
     className: "cam", iconSize: [size, size], iconAnchor: [size / 2, size / 2], popupAnchor: [0, -size * 0.3],
-    html: camSvg(cam.kind, cam) + `<span class="sr-only">${esc(cam.title)}${cam.kind === "ladot" ? ", " + (cam.live ? "live" : "under construction") : ""}</span>`,
+    html: camSvg(cam.kind, cam) + `<span class="sr-only">${esc(cam.title)}${cam.kind === "city" ? ", " + (cam.live ? "live" : "under construction") : ""}</span>`,
   }));
   return iconCache.get(key);
 }
@@ -629,7 +630,6 @@ const corridorLayer = L.featureGroup();
 // ---------- camera data ----------
 let cams = [];
 const camByKey = new Map();
-let snapBounds = null;
 let corridors = [];
 
 function osmCam(id, lat, lon, kind, tags) {
@@ -640,10 +640,10 @@ function osmCam(id, lat, lon, kind, tags) {
     title: kind === "alpr" ? `License plate reader${maker ? ` (${maker})` : ""}` : "Speed camera",
   };
 }
-function ladotCam(c) {
-  const corr = c.corridor != null ? corridors[c.corridor] : null;
+function ladotCam(c, regionCorridors) {
+  const corr = c.corridor != null ? regionCorridors[c.corridor] : null;
   return {
-    key: "L" + c.id, siteId: c.id, kind: "ladot", lat: c.lat, lon: c.lon, dirs: [],
+    key: "L" + c.id, siteId: c.id, kind: "city", lat: c.lat, lon: c.lon, dirs: [],
     live: /live/i.test(c.status || ""), status: c.status, corridor: corr,
     title: corr && corr.street ? `LA city speed camera, ${corr.street}` : "LA city speed camera",
   };
@@ -668,7 +668,7 @@ function removeCams(list) {
 
 function popupHtml(cam) {
   const rows = [], t = cam.tags || {};
-  if (cam.kind === "ladot") {
+  if (cam.kind === "city") {
     rows.push(["Status", LADOT_STATUS[cam.status] || cam.status || "Unknown"]);
     const k = cam.corridor;
     if (k) {
@@ -696,31 +696,67 @@ function popupHtml(cam) {
     ${tagRows ? `<details><summary>OpenStreetMap tags</summary><div class="tags">${tagRows}</div></details>` : ""}</div>`;
 }
 
-async function loadSnapshot() {
-  try {
-    const res = await fetch(SNAPSHOT_URL, { cache: "no-cache" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const snap = await res.json();
-    const [s, w, n, e] = snap.bbox;
-    snapBounds = L.latLngBounds([s, w], [n, e]);
-    corridors = snap.corridors.map(c => {
-      const pts = c.rings.flat();
-      return Object.assign(c, {
-        bb: [Math.min(...pts.map(p => p[1])), Math.min(...pts.map(p => p[0])), Math.max(...pts.map(p => p[1])), Math.max(...pts.map(p => p[0]))],
+// ---------- saved regional data (data/regions.json lists them; each loads when you look there) ----------
+let regions = [];
+const fmtDate = (iso) => new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+function countsText(n) {
+  const parts = [`${n.alpr.toLocaleString()} plate readers`, `${n.speed.toLocaleString()} speed cameras`];
+  if (n.city) parts.push(`${n.city.toLocaleString()} city sites`);
+  return parts.join(", ");
+}
+const inSavedRegion = (b) => regions.some(r => r.bounds.contains(b));
+
+function loadRegion(r) {
+  if (!r.loaded) r.loaded = (async () => {
+    setStatus(`Loading ${r.name} cameras…`);
+    try {
+      const res = await fetch(r.file, { cache: "no-cache" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const snap = await res.json();
+      const regionCorridors = snap.corridors.map(c => {
+        const pts = c.rings.flat();
+        return Object.assign(c, {
+          bb: [Math.min(...pts.map(p => p[1])), Math.min(...pts.map(p => p[0])), Math.max(...pts.map(p => p[1])), Math.max(...pts.map(p => p[0]))],
+        });
       });
-    });
-    for (const c of corridors) {
-      L.polygon(c.rings.map(r => r.map(([x, y]) => [y, x])), {
-        color: COLORS.ladot, weight: 2, dashArray: "6 5", fillOpacity: 0.12, interactive: false,
-      }).addTo(corridorLayer);
+      corridors = corridors.concat(regionCorridors);
+      for (const c of regionCorridors) {
+        L.polygon(c.rings.map(ring => ring.map(([x, y]) => [y, x])), {
+          color: COLORS.city, weight: 2, dashArray: "6 5", fillOpacity: 0.12, interactive: false,
+        }).addTo(corridorLayer);
+      }
+      addCams(snap.osm.map(([id, lat, lon, kind, tags]) => osmCam(id, lat, lon, kind, tags))
+        .concat(snap.city.map(c => ladotCam(c, regionCorridors))));
+      setStatus(`${r.name}: ${countsText(r.counts)} · data from ${fmtDate(snap.generated)}`);
+      syncLayers();
+      renderList();
+      updatePlaceStatus();
+    } catch (e) {
+      console.warn(`${r.name} data unavailable:`, e);
+      r.loaded = null;   // try again next time
+      setStatus(`Couldn't load saved ${r.name} data`);
     }
-    addCams(snap.osm.map(([id, lat, lon, kind, tags]) => osmCam(id, lat, lon, kind, tags)).concat(snap.ladot.map(ladotCam)));
-    const date = new Date(snap.generated).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
-    $("snap-date").textContent = `LA camera data updated ${date}. Press “Refresh live data” for the latest edits in view.`;
-    const total = (k) => cams.filter(c => c.kind === k).length.toLocaleString();
-    setStatus(`${total("alpr")} plate readers, ${total("speed")} speed cameras and ${total("ladot")} city sites · data from ${date}`);
+  })();
+  return r.loaded;
+}
+const loadRegionsFor = (bounds) => Promise.all(regions.filter(r => r.bounds.intersects(bounds)).map(loadRegion));
+map.on("moveend", () => loadRegionsFor(map.getBounds()));
+
+async function loadRegionIndex() {
+  try {
+    const res = await fetch(REGIONS_URL, { cache: "no-cache" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    regions = (await res.json()).map(r => Object.assign(r, {
+      bounds: L.latLngBounds([r.bbox[0], r.bbox[1]], [r.bbox[2], r.bbox[3]]), loaded: null,
+    }));
+    $("snap-date").textContent = "Saved camera data: " + regions.map(r => `${r.name} (updated ${fmtDate(r.generated)})`).join(", ")
+      + ". Elsewhere the map asks OpenStreetMap live. Press “Refresh live data” for the latest edits in view.";
+    await loadRegionsFor(map.getBounds());
+    if (!regions.some(r => r.bounds.intersects(map.getBounds()))) {
+      setStatus("Saved data covers " + regions.map(r => r.name).join(" and ") + ". Search an address or zoom in to see cameras here.");
+    }
   } catch (e) {
-    console.warn("Snapshot unavailable:", e);
+    console.warn("Region list unavailable:", e);
     setStatus("Couldn't load saved camera data. Getting live data…");
     if (map.getZoom() >= MIN_ZOOM_FOR_QUERY) loadLive(map.getBounds());
   }
@@ -774,11 +810,12 @@ async function loadLive(bounds, { quiet = false } = {}) {
     const fresh = elements.map(el => osmCam(el.id, el.lat, el.lon,
       (el.tags || {})["surveillance:type"] === "ALPR" ? "alpr" : "speed", el.tags || {}));
     const freshKeys = new Set(fresh.map(c => c.key));
-    removeCams(cams.filter(c => c.kind !== "ladot" && (bounds.contains([c.lat, c.lon]) || freshKeys.has(c.key))));
+    removeCams(cams.filter(c => c.kind !== "city" && (bounds.contains([c.lat, c.lon]) || freshKeys.has(c.key))));
     addCams(fresh);
     liveBoxes.push(bounds);
     setStatus(`Live data for this area at ${clock()}: ${fresh.length.toLocaleString()} cameras from OpenStreetMap`);
     renderList();
+    updatePlaceStatus();
   } catch (e) {
     setStatus("Live data unavailable right now");
     if (!quiet) note(`Couldn't reach OpenStreetMap (${esc(e.message)}). The free servers get busy; the saved LA data still works. Try again in a minute.`);
@@ -788,13 +825,13 @@ async function loadLive(bounds, { quiet = false } = {}) {
   }
 }
 
-// Browsing outside the snapshot area: fetch live data for the view automatically.
+// Browsing outside every saved region: fetch live data for the view automatically.
 let autoTimer = null;
 map.on("moveend", () => {
   clearTimeout(autoTimer);
-  if (driving || !snapBounds || map.getZoom() < MIN_ZOOM_FOR_QUERY) return;
+  if (driving || map.getZoom() < MIN_ZOOM_FOR_QUERY) return;
   const view = map.getBounds();
-  if (snapBounds.contains(view) || liveBoxes.some(b => b.contains(view))) return;
+  if (inSavedRegion(view) || liveBoxes.some(b => b.contains(view))) return;
   autoTimer = setTimeout(() => loadLive(view.pad(0.2), { quiet: true }), 1200);
 });
 
@@ -803,7 +840,7 @@ function syncLayers() {
   for (const kind of KINDS) {
     if (settings[kind]) map.addLayer(groups[kind]); else map.removeLayer(groups[kind]);
   }
-  if (settings.ladot && map.getZoom() >= 13) map.addLayer(corridorLayer); else map.removeLayer(corridorLayer);
+  if (settings.city && map.getZoom() >= 13) map.addLayer(corridorLayer); else map.removeLayer(corridorLayer);
 }
 map.on("zoomend", syncLayers);
 
@@ -853,7 +890,7 @@ function renderList() {
   const focusedKey = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.key : null;
   $("list").innerHTML = top.map(c => `<li><button type="button" class="item" data-key="${c.key}">${camSvg(c.kind, c)}
       <span><span class="item-title">${esc(c.title)}</span>
-      <span class="item-meta">${fmtDist(c._d)} ${compass(bearing(r.lat, r.lon, c.lat, c.lon))}${c.kind === "ladot" ? " · " + (c.live ? "Live" : "Under construction") : ""}</span></span>
+      <span class="item-meta">${fmtDist(c._d)} ${compass(bearing(r.lat, r.lon, c.lat, c.lon))}${c.kind === "city" ? " · " + (c.live ? "Live" : "Under construction") : ""}</span></span>
     </button></li>`).join("") || `<li class="empty">No cameras shown in this part of the map. Zoom out, move the map or turn on more camera types.</li>`;
   if (focusedKey) { const el = $("list").querySelector(`[data-key="${focusedKey}"]`); if (el) el.focus(); }
 }
@@ -1059,8 +1096,21 @@ function choosePlace(r) {
       <p><b>${esc(nearbySummary(place.lat, place.lon))}</b></p>
       <p class="links"><a href="https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lon}" target="_blank" rel="noopener">Open in Google Maps</a></p></div>`);
   map.setView([r.lat, r.lon], 16, { animate: !reduceMotion });
-  setStatus(`${r.main}: ${nearbySummary(r.lat, r.lon)}`);
+  const around = L.latLng(r.lat, r.lon).toBounds(NEARBY_M * 2);
+  if (inSavedRegion(around)) {
+    setStatus(`${r.main}: loading cameras…`);
+    loadRegionsFor(around).then(updatePlaceStatus);
+  } else {
+    setStatus(`${r.main}: getting live camera data for this area…`);   // the moveend handler fetches it
+  }
+  updatePlaceStatus();
   renderList();
+}
+function updatePlaceStatus() {
+  if (!place) return;
+  const around = L.latLng(place.lat, place.lon).toBounds(NEARBY_M * 2);
+  const ready = regions.some(r => r.bounds.contains(around) && r.loaded) || liveBoxes.some(b => b.contains(around));
+  if (ready) setStatus(`${place.main}: ${nearbySummary(place.lat, place.lon)}`);
 }
 function clearPlace() {
   place = null;
@@ -1119,7 +1169,7 @@ function isAhead(c, d) {
   if (heading == null || !(speed > 2.5) || d < 40) return true;   // stopped or unsure: anything close counts
   return angleDiff(heading, bearing(lat, lon, c.lat, c.lon)) <= 50;
 }
-function alertable(c) { return settings[c.kind] && (c.kind !== "ladot" || c.live); }
+function alertable(c) { return settings[c.kind] && (c.kind !== "city" || c.live); }
 
 function updateHud() {
   if (!driving) return;
@@ -1213,8 +1263,8 @@ async function keepAwake() {
 }
 document.addEventListener("visibilitychange", () => { if (driving && document.visibilityState === "visible") keepAwake(); });
 
-function maybeFetchAround(lat, lon) {   // outside the LA snapshot, fetch live data as you go
-  if (snapBounds && snapBounds.pad(-0.02).contains([lat, lon])) return;
+function maybeFetchAround(lat, lon) {   // outside the saved regions, fetch live data as you go
+  if (regions.some(r => r.bounds.pad(-0.02).contains([lat, lon]))) return;
   if (lastLiveCenter && distM(lat, lon, lastLiveCenter[0], lastLiveCenter[1]) < 3000) return;
   lastLiveCenter = [lat, lon];
   loadLive(L.latLngBounds([lat - 0.05, lon - 0.06], [lat + 0.05, lon + 0.06]), { quiet: true });
@@ -1275,7 +1325,7 @@ $("btn-recenter").addEventListener("click", () => {
 });
 
 updateInset();
-loadSnapshot();
+loadRegionIndex();
 </script>
 </body>
 </html>

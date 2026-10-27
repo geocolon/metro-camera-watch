@@ -1,12 +1,12 @@
 # LA Camera Watch
 
-A map of automated license plate readers (ALPR, such as Flock Safety) and speed cameras in Los Angeles, with spoken alerts while you drive.
+A map of automated license plate readers (ALPR, such as Flock Safety) and speed cameras, with spoken alerts while you drive. It has saved data for the Los Angeles and New York City areas, and fetches live data anywhere else.
 
 **Live map:** https://geocolon.github.io/la-camera-watch/
 
 ## Features
 
-- **Camera icons you can tell apart without color.** Each type has its own shape and a camera symbol: plate readers are squares, speed cameras are circles, and LA city speed cameras are diamonds (solid when live, outline while under construction). Colors come from the Okabe-Ito palette, which stays distinct with common color blindness. A small pointer shows which way a camera faces when that's known.
+- **Camera icons you can tell apart without color.** Each type has its own shape and a camera symbol: plate readers are squares, speed cameras are circles, and official city speed cameras are diamonds (solid when live, outline while under construction). Colors come from the Okabe-Ito palette, which stays distinct with common color blindness. A small pointer shows which way a camera faces when that's known.
 - **Address search.** Type an address or place, like Google Maps, and pick from the suggestions (arrow keys and Enter work too). A pin drops there, the status says how many cameras are within half a mile, and the camera list is sorted by distance from that address. Search uses [Photon](https://photon.komoot.io), OpenStreetMap's address search.
 - **Drive mode.** It follows your location and shows your speed, and inside LA's speed camera corridors it shows the posted limit. As you approach a camera, it plays a chime, says something like "Speed camera ahead, 950 feet", vibrates (Android) and shows a large banner. It only warns about cameras in your direction of travel, and gives more warning at higher speeds. It keeps the screen on while it runs.
 - **Phone-first layout.** There's a Google Maps-style bottom sheet and large touch targets. You can add it to your home screen to use it like an app (Share → Add to Home Screen on iPhone).
@@ -23,12 +23,15 @@ A map of automated license plate readers (ALPR, such as Flock Safety) and speed 
 ## How it works
 
 - `index.html` is a single static page built on [Leaflet](https://leafletjs.com) and [Leaflet.markercluster](https://github.com/Leaflet/Leaflet.markercluster). It has no backend.
-- It starts from `data/cameras.json`, a snapshot of the LA area built by `scripts/build_snapshot.py`. A GitHub Action (`.github/workflows/update-data.yml`) refreshes the snapshot every day. The free Overpass servers are often slow, so the snapshot keeps the map fast and reliable.
+- It starts from saved regional snapshots built by `scripts/build_snapshot.py`. `data/regions.json` lists them, and each region's file (`data/la.json`, `data/ny.json`) loads only when you look at or search in that area. A GitHub Action (`.github/workflows/update-data.yml`) refreshes them every day. The free Overpass servers are often slow, so the snapshots keep the map fast and reliable.
+  - **Los Angeles area:** OpenStreetMap cameras plus LADOT's official speed camera sites.
+  - **New York City area** (the five boroughs, Yonkers and lower Westchester, Long Island and nearby New Jersey): OpenStreetMap cameras. NYC doesn't publish its speed camera locations, so only cameras that volunteers have mapped appear.
+  - To add a region, add it to `REGIONS` in `scripts/build_snapshot.py`.
 - **Refresh live data** asks the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) for the latest OpenStreetMap edits in view:
   - `surveillance:type=ALPR` for license plate readers
   - `highway=speed_camera` for speed cameras
   
-  Browsing or driving outside the snapshot area fetches live data automatically.
+  Browsing or driving outside every saved region fetches live data automatically.
 - City camera sites and corridors (street, cross streets, speed limit) come from LADOT's public ArcGIS layers ([program page](https://ladot.lacity.gov/speed-safety-system)).
 
 ### Drive mode limits
@@ -53,7 +56,7 @@ Both use only the Python standard library (3.7+).
 python3 scripts/build_snapshot.py
 ```
 
-Rebuilds `data/cameras.json`.
+Rebuilds every region's snapshot. Name regions to rebuild only those, for example `python3 scripts/build_snapshot.py ny`.
 
 ```bash
 python3 scripts/cameras_to_kml.py

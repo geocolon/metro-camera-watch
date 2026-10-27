@@ -1,0 +1,19 @@
+[
+ {
+  "id": "la",
+  "name": "Los Angeles area",
+  "bbox": [
+   33.7,
+   -118.95,
+   34.45,
+   -117.65
+  ],
+  "file": "data/la.json",
+  "generated": "2026-10-27T19:01:40Z",
+  "counts": {
+   "alpr": 4525,
+   "speed": 10,
+   "city": 125
+  }
+ }
+]
