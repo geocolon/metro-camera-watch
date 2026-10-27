@@ -1,17 +1,38 @@
 # LA Camera Watch
 
-A live map of automated license plate readers (ALPR, such as Flock Safety) and speed cameras in Los Angeles.
+A map of automated license plate readers (ALPR, such as Flock Safety) and speed cameras in Los Angeles, with spoken alerts while you drive.
 
 **Live map:** https://geocolon.github.io/la-camera-watch/
 
+## Features
+
+- **Camera icons you can tell apart without color.** Each type has its own shape and a camera symbol: plate readers are squares, speed cameras are circles, and LA city speed cameras are diamonds (solid when live, outline while under construction). Colors come from the Okabe-Ito palette, which stays distinct with common color blindness. A small pointer shows which way a camera faces when that's known.
+- **Drive mode.** It follows your location and shows your speed, and inside LA's speed camera corridors it shows the posted limit. As you approach a camera, it plays a chime, says something like "Speed camera ahead, 950 feet", vibrates (Android) and shows a large banner. It only warns about cameras in your direction of travel, and gives more warning at higher speeds. It keeps the screen on while it runs.
+- **Phone-first layout.** There's a Google Maps-style bottom sheet and large touch targets. You can add it to your home screen to use it like an app (Share → Add to Home Screen on iPhone).
+- **Dark mode** follows your system setting.
+
+## Accessibility
+
+- Every camera is a keyboard-focusable button with a spoken name, and **Cameras in view** is a text list of the nearest cameras with distance and direction. Choosing one opens its details and moves focus there.
+- A skip link goes straight to the list. Focus outlines are always visible, and touch targets are at least 44 px.
+- Status updates and drive alerts are announced to screen readers through live regions.
+- Meaning never depends on color alone: shapes, symbols and text labels carry it too. There's also a **Bigger camera icons** setting.
+- Animations are turned off when your system asks for reduced motion.
+
 ## How it works
 
-- `index.html` is a single static page built on [Leaflet](https://leafletjs.com). It has no backend.
-- Each time you load the page or press **Refresh this area**, your browser asks the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) for OpenStreetMap camera nodes inside the visible map:
+- `index.html` is a single static page built on [Leaflet](https://leafletjs.com) and [Leaflet.markercluster](https://github.com/Leaflet/Leaflet.markercluster). It has no backend.
+- It starts from `data/cameras.json`, a snapshot of the LA area built by `scripts/build_snapshot.py`. A GitHub Action (`.github/workflows/update-data.yml`) refreshes the snapshot every day. The free Overpass servers are often slow, so the snapshot keeps the map fast and reliable.
+- **Refresh live data** asks the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) for the latest OpenStreetMap edits in view:
   - `surveillance:type=ALPR` for license plate readers
   - `highway=speed_camera` for speed cameras
-- It also loads LADOT's official speed safety camera sites from the city's public ArcGIS map ([program page](https://ladot.lacity.gov/speed-safety-system)).
-- Where a camera has a `direction` tag, a short line shows which way it points.
+  
+  Browsing or driving outside the snapshot area fetches live data automatically.
+- City camera sites and corridors (street, cross streets, speed limit) come from LADOT's public ArcGIS layers ([program page](https://ladot.lacity.gov/speed-safety-system)).
+
+### Drive mode limits
+
+Web pages can't run in the background. Keep the page open and on screen in a phone mount; locking the phone or switching apps pauses alerts. Set things up before you drive, and always follow posted limits, because the camera data is incomplete.
 
 ## Run locally
 
@@ -21,17 +42,23 @@ OSM's tile servers block pages opened straight from disk, so serve the folder:
 python3 -m http.server 8000
 ```
 
-Then open http://localhost:8000/.
+Then open http://localhost:8000/. Location and drive mode need `localhost` or HTTPS.
 
-## Export to Google My Maps
+## Scripts
 
-`scripts/cameras_to_kml.py` writes a KML file with two layers (ALPR and speed cameras). It uses only the Python standard library.
+Both use only the Python standard library (3.7+).
+
+```bash
+python3 scripts/build_snapshot.py
+```
+
+Rebuilds `data/cameras.json`.
 
 ```bash
 python3 scripts/cameras_to_kml.py
 ```
 
-Pass `--bbox south,west,north,east` for another area or `-o file.kml` to rename the output. In [Google My Maps](https://www.google.com/mymaps), choose **Create a new map → Import** and select `cameras.kml`.
+Writes `cameras.kml` for [Google My Maps](https://www.google.com/mymaps): choose **Create a new map → Import**. Pass `--bbox south,west,north,east` for another area.
 
 ## Add a missing camera
 
@@ -39,9 +66,9 @@ Camera locations come from volunteers. If you spot one that isn't on the map, ad
 
 ## Credits and license
 
-- Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), available under the Open Database License (ODbL).
+- Map data and tiles © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), available under the Open Database License (ODbL).
 - Much of the ALPR data is contributed through [DeFlock](https://deflock.me).
 - Official speed camera sites: [LADOT Speed Safety System](https://ladot.lacity.gov/speed-safety-system).
-- Map library: [Leaflet](https://leafletjs.com) (BSD-2-Clause).
+- Map libraries: [Leaflet](https://leafletjs.com) (BSD-2-Clause) and Leaflet.markercluster (MIT).
 
 The code in this repository is released under the [MIT License](LICENSE). The camera data is not covered by that license; it stays under the ODbL.

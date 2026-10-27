@@ -4,184 +4,684 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>LA Camera Watch</title>
+<meta name="description" content="Live map of license plate readers (Flock/ALPR) and speed cameras in Los Angeles, with spoken alerts while you drive.">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1f1f1f" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Camera Watch">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
 <!--
-  LA Camera Watch: a live map of ALPR (Flock etc.) and speed cameras.
+  LA Camera Watch: a map of ALPR (Flock etc.) and speed cameras, with drive mode alerts.
 
-  Every time you load the page or press "Refresh this area", it asks the
-  OpenStreetMap Overpass API for cameras inside the visible map, so you
-  always see the latest community edits. It also tries to load LADOT's
-  official 125-site speed camera layer from the city's public ArcGIS map.
+  Data: the page loads data/cameras.json, a daily snapshot of the LA area built by
+  scripts/build_snapshot.py (OpenStreetMap via Overpass + LADOT's public ArcGIS
+  layers). "Refresh live data" asks Overpass for the current view, and browsing or
+  driving outside the snapshot area fetches live data automatically.
 
-  Run it from a local web server (OSM's tile servers block pages opened
-  straight from disk):
-      cd folder-with-this-file
-      python3 -m http.server 8000
-  then open http://localhost:8000/
+  Run locally (tile servers block pages opened straight from disk):
+      python3 -m http.server 8000      then open http://localhost:8000/
+
+  Accessibility: colors are the Okabe-Ito palette (distinguishable with common
+  color blindness) and every camera type also has its own shape. Markers are
+  keyboard-focusable buttons, and the "Cameras in view" list is a text version of
+  the map.
 
   Open-source pieces:
-    Leaflet ............ https://leafletjs.com (BSD-2)
-    OSM data / tiles ... (c) OpenStreetMap contributors, ODbL
-    Overpass API ....... https://wiki.openstreetmap.org/wiki/Overpass_API
+    Leaflet ................ https://leafletjs.com (BSD-2)
+    Leaflet.markercluster .. https://github.com/Leaflet/Leaflet.markercluster (MIT)
+    OSM data ............... (c) OpenStreetMap contributors, ODbL
 -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@500;700&display=swap">
 <style>
-  /* Layout: full-screen map with a control rail on top (wide) or a bottom sheet (phone). */
   :root {
-    --bg: #f3f5f7;
+    --bg: #f1f3f4;
     --panel: #ffffff;
-    --ink: #17202a;
-    --muted: #5b6672;
-    --line: #d8dee5;
-    --alpr: #d1284a;     /* license-plate readers */
-    --speed: #e08a00;    /* OSM speed cameras */
-    --ladot: #1f6fd1;    /* official LADOT sites */
-    --ok: #1f8a4c;
-    --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
-    --font-data: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+    --ink: #1f1f1f;
+    --muted: #5f6368;
+    --line: #dadce0;
+    --accent: #0b57d0;
+    --on-accent: #ffffff;
+    --focus: #0b57d0;
+    --danger: #b3261e;
+    --shadow: 0 1px 3px rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15);
+    /* Okabe-Ito colors: distinguishable with protanopia, deuteranopia and tritanopia */
+    --alpr: #0072B2;
+    --speed: #E69F00;
+    --ladot: #CC79A7;
+    --font-ui: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-data: "Roboto Mono", ui-monospace, Menlo, Consolas, monospace;
+    --inset-bottom: 0px;
+    --tile-filter: saturate(.55) contrast(.95) brightness(1.04);
+    color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #0f1419; --panel: #182029; --ink: #e6ebf0; --muted: #98a4b0; --line: #2a3542;
-      --alpr: #ff5c7a; --speed: #ffb238; --ladot: #5aa2ff; --ok: #4cc17f; color-scheme: dark;
+      --bg: #131314; --panel: #1f1f1f; --ink: #e3e3e3; --muted: #a8abaf; --line: #3c4043;
+      --accent: #a8c7fa; --on-accent: #062e6f; --focus: #a8c7fa; --danger: #f2b8b5;
+      --shadow: 0 1px 3px rgba(0,0,0,.6), 0 4px 8px 3px rgba(0,0,0,.35);
+      --tile-filter: invert(1) hue-rotate(180deg) saturate(.4) brightness(.9) contrast(.9);
+      color-scheme: dark;
     }
   }
   :root[data-theme="dark"] {
-    --bg: #0f1419; --panel: #182029; --ink: #e6ebf0; --muted: #98a4b0; --line: #2a3542;
-    --alpr: #ff5c7a; --speed: #ffb238; --ladot: #5aa2ff; --ok: #4cc17f; color-scheme: dark;
+    --bg: #131314; --panel: #1f1f1f; --ink: #e3e3e3; --muted: #a8abaf; --line: #3c4043;
+    --accent: #a8c7fa; --on-accent: #062e6f; --focus: #a8c7fa; --danger: #f2b8b5;
+    --shadow: 0 1px 3px rgba(0,0,0,.6), 0 4px 8px 3px rgba(0,0,0,.35);
+    --tile-filter: invert(1) hue-rotate(180deg) saturate(.4) brightness(.9) contrast(.9);
+    color-scheme: dark;
   }
 
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; }
   body {
     background: var(--bg); color: var(--ink);
-    font: 14px/1.45 var(--font-ui);
-    display: flex; flex-direction: column;
+    font: 16px/1.45 var(--font-ui);
+    overflow: hidden;
   }
-  header {
-    background: var(--panel); border-bottom: 1px solid var(--line);
-    padding-block: 10px;
-    padding-left: max(16px, env(safe-area-inset-left, 0px));
-    padding-right: max(16px, env(safe-area-inset-right, 0px));
-    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+  .sr-only {
+    position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
-  h1 { font-size: 17px; margin: 0; letter-spacing: .01em; text-wrap: balance; }
-  .layers, .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .chip {
-    display: inline-flex; align-items: center; gap: 7px;
-    border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px 4px 8px;
-    cursor: pointer; user-select: none; background: var(--bg);
+  .skip {
+    position: absolute; left: 12px; top: -60px; z-index: 3000;
+    background: var(--accent); color: var(--on-accent); padding: 10px 14px; border-radius: 8px;
+    font-weight: 500; text-decoration: none;
   }
-  .chip input { margin: 0; accent-color: var(--ink); }
-  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-  .count { font-family: var(--font-data); font-variant-numeric: tabular-nums; color: var(--muted); }
-  button {
-    font: 600 13px var(--font-ui); color: var(--ink);
-    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
-    padding: 6px 11px; cursor: pointer;
+  .skip:focus { top: 12px; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  a { color: var(--accent); }
+
+  /* ---------- layout: side panel (wide) / bottom sheet (phone) ---------- */
+  .app { position: fixed; inset: 0; display: grid; grid-template-columns: 380px 1fr; }
+  .panel {
+    background: var(--panel); border-right: 1px solid var(--line);
+    overflow-y: auto; overscroll-behavior: contain;
+    display: flex; flex-direction: column; z-index: 1000;
   }
-  button.primary { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-  button:focus-visible, .chip:focus-within { outline: 2px solid var(--ladot); outline-offset: 2px; }
-  button:disabled { opacity: .55; cursor: progress; }
-  .status {
-    margin-left: auto; font-family: var(--font-data); font-size: 12px; color: var(--muted);
-    font-variant-numeric: tabular-nums; min-width: 0;
+  .map-wrap { position: relative; min-width: 0; }
+  #map { position: absolute; inset: 0; background: var(--bg); }
+
+  .sheet-handle { display: none; }
+  .panel-head { padding: 18px 20px 6px; }
+  h1 { font-size: 22px; font-weight: 500; margin: 0; text-wrap: balance; }
+  .status { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+  h2 { font-size: 14px; font-weight: 500; color: var(--muted); margin: 0 0 8px; letter-spacing: .02em; }
+  section { padding: 12px 20px; }
+  .more > section + section, .more > details { border-top: 1px solid var(--line); }
+
+  /* ---------- buttons ---------- */
+  button, select { font: inherit; color: inherit; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 48px; padding: 0 18px; border-radius: 24px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    font-weight: 500; font-size: 15px; cursor: pointer;
   }
-  .status.live::before {
-    content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-    background: var(--ok); margin-right: 6px; vertical-align: 1px;
+  .btn svg { width: 20px; height: 20px; flex: none; }
+  .btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .btn:disabled { opacity: .6; cursor: progress; }
+  .btn:hover:not(:disabled) { filter: brightness(.96); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 20px 14px; }
+  .actions .primary { flex: 1 1 100%; }
+  .actions .btn:not(.primary) { flex: 1 1 0; padding: 0 12px; }
+
+  /* ---------- layer filters (also the legend) ---------- */
+  .filters { display: grid; gap: 6px; }
+  .filter {
+    display: grid; grid-template-columns: 24px 40px 1fr auto; align-items: center; gap: 10px;
+    padding: 6px 8px; border-radius: 12px; cursor: pointer; min-height: 52px;
   }
-  #map { flex: 1; min-height: 0; background: var(--bg); }
-  .leaflet-popup-content { font: 13px/1.4 var(--font-ui); min-width: 200px; }
-  .leaflet-popup-content h3 { margin: 0 0 6px; font-size: 14px; }
-  .tags { font-family: var(--font-data); font-size: 11px; max-height: 160px; overflow: auto; color: #444; }
+  .filter:hover { background: var(--bg); }
+  .filter input { width: 22px; height: 22px; margin: 0; accent-color: var(--accent); }
+  .filter:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 1px; }
+  .filter svg { width: 40px; height: 40px; display: block; }
+  .filter .name { font-weight: 500; line-height: 1.25; }
+  .filter small { display: block; color: var(--muted); font-size: 13px; font-weight: 400; }
+  .count { font: 500 14px var(--font-data); font-variant-numeric: tabular-nums; color: var(--muted); }
+
+  /* ---------- settings ---------- */
+  details.settings { padding: 0 20px; }
+  details.settings summary {
+    min-height: 48px; display: flex; align-items: center; cursor: pointer;
+    font-weight: 500; list-style: none;
+  }
+  details.settings summary::-webkit-details-marker { display: none; }
+  details.settings summary::after { content: "▾"; margin-left: auto; color: var(--muted); }
+  details.settings[open] summary::after { content: "▴"; }
+  .set-grid { display: grid; gap: 10px; padding-bottom: 14px; }
+  .set-row { display: flex; align-items: center; gap: 10px; min-height: 40px; }
+  .set-row input[type=checkbox] { width: 22px; height: 22px; margin: 0; accent-color: var(--accent); flex: none; }
+  .set-row select {
+    min-height: 40px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); padding: 0 8px; margin-left: auto; max-width: 60%;
+  }
+  .hint { color: var(--muted); font-size: 13px; margin: 0; }
+
+  /* ---------- camera list (text version of the map) ---------- */
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list:focus { outline: none; }
+  .item {
+    width: 100%; display: grid; grid-template-columns: 36px 1fr; gap: 12px; align-items: center;
+    text-align: left; background: none; border: 0; border-radius: 10px; padding: 8px; cursor: pointer;
+    min-height: 52px;
+  }
+  .item:hover { background: var(--bg); }
+  .item svg { width: 36px; height: 36px; display: block; }
+  .item-title { display: block; font-weight: 500; line-height: 1.3; }
+  .item-meta { display: block; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+  .empty { color: var(--muted); padding: 8px; }
+  .credits { margin-top: auto; padding: 14px 20px 20px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); }
+  .credits p { margin: 0 0 6px; }
+
+  /* ---------- markers ---------- */
+  .cam { background: none; border: 0; }
+  .cam svg { width: 100%; height: 100%; display: block; overflow: visible; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
+  .cam:focus-visible { outline: none; }
+  .cam:focus-visible svg { filter: drop-shadow(0 0 0 #fff) drop-shadow(0 0 3px var(--focus)) drop-shadow(0 0 3px var(--focus)); }
+  .me { background: none; border: 0; pointer-events: none; }
+  .me svg { width: 100%; height: 100%; display: block; overflow: visible; }
+
+  /* ---------- Leaflet tweaks: bigger touch targets, theme ---------- */
+  .leaflet-container { font: 15px/1.4 var(--font-ui); }
+  .leaflet-bar a { width: 44px !important; height: 44px !important; line-height: 44px !important; font-size: 22px !important; }
+  .leaflet-bar a, .leaflet-bar a:hover { background: var(--panel); color: var(--ink); border-color: var(--line); }
+  .leaflet-bar { border: 0 !important; box-shadow: var(--shadow) !important; border-radius: 8px !important; overflow: hidden; }
+  .leaflet-bottom { bottom: var(--inset-bottom); }
+  /* Muted basemap so the camera icons stand out; dark mode inverts the OSM tiles. */
+  .leaflet-tile-pane { filter: var(--tile-filter); }
+  .leaflet-control-attribution { background: color-mix(in srgb, var(--panel) 85%, transparent) !important; color: var(--ink); font-size: 11px; }
+  .leaflet-control-attribution a { color: var(--accent); }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+  .leaflet-popup-content-wrapper { border-radius: 14px; }
+  .leaflet-popup-content { margin: 14px 18px; min-width: 220px; }
+  .leaflet-container a.leaflet-popup-close-button { width: 36px; height: 36px; font: 24px/36px var(--font-ui); color: var(--muted); }
+  .pop h3 { margin: 0 28px 8px 0; font-size: 17px; font-weight: 500; display: flex; gap: 8px; align-items: center; }
+  .pop h3:focus { outline: none; }
+  .pop h3 svg { width: 28px; height: 28px; flex: none; }
+  .pop dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0 0 10px; font-size: 14px; }
+  .pop dt { color: var(--muted); }
+  .pop dd { margin: 0; }
+  .pop .links { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 6px; font-size: 14px; }
+  .pop .links a { display: inline-block; padding: 6px 0; font-weight: 500; }
+  .pop details { font-size: 13px; }
+  .pop summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
+  .tags { font: 12px/1.5 var(--font-data); max-height: 140px; overflow: auto; color: var(--muted); }
+
   .note {
-    position: absolute; z-index: 500; left: 50%; transform: translateX(-50%);
-    bottom: calc(24px + env(safe-area-inset-bottom, 0px));
-    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 10px; padding: 8px 12px; max-width: min(520px, calc(100% - 32px));
-    box-shadow: 0 4px 18px rgba(0,0,0,.15); font-size: 13px;
+    position: absolute; z-index: 1500; left: 50%; transform: translateX(-50%);
+    top: calc(14px + env(safe-area-inset-top, 0px));
+    background: var(--panel); color: var(--ink); border-radius: 12px; box-shadow: var(--shadow);
+    padding: 10px 14px; width: max-content; max-width: min(520px, calc(100% - 32px)); font-size: 15px;
+    display: flex; gap: 10px; align-items: flex-start;
   }
-  .wrap { position: relative; flex: 1; display: flex; min-height: 0; }
-  @media (max-width: 640px) {
-    .status { margin-left: 0; width: 100%; }
-    h1 { font-size: 16px; }
+  .note button { margin-left: auto; background: none; border: 0; font-size: 20px; line-height: 1; padding: 2px 4px; cursor: pointer; color: var(--muted); }
+
+  /* ---------- drive mode HUD ---------- */
+  .hud { position: absolute; inset: 0; z-index: 1200; pointer-events: none; }
+  .hud > * { pointer-events: auto; }
+  .alert {
+    position: absolute; left: 12px; right: 12px; top: calc(12px + env(safe-area-inset-top, 0px));
+    max-width: 640px; margin: 0 auto;
+    background: #111; color: #fff; border-radius: 16px; border-left: 10px solid #ffd400;
+    box-shadow: 0 6px 24px rgba(0,0,0,.45);
+    display: grid; grid-template-columns: 64px 1fr auto; gap: 14px; align-items: center; padding: 14px 18px 14px 12px;
   }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  .alert svg { width: 64px; height: 64px; display: block; }
+  .alert-title { font-size: 22px; font-weight: 700; line-height: 1.2; }
+  .alert-sub { font-size: 16px; color: #d9d9d9; }
+  .alert-dist { font: 700 34px var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  @media (max-width: 480px) {
+    .alert { grid-template-columns: 52px 1fr; gap: 4px 12px; }
+    .alert > div:first-of-type { grid-column: 2; }
+    .alert-dist { grid-column: 2; font-size: 30px; }
+    .alert svg { width: 52px; height: 52px; }
+    #alert-icon { grid-row: 1 / span 2; }
+    .alert-title { font-size: 20px; }
+  }
+  .hud-bar {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: var(--panel); box-shadow: var(--shadow); border-radius: 18px 18px 0 0;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+    display: grid; grid-template-columns: auto auto 1fr; grid-template-areas: "speed limit next" "btns btns btns";
+    gap: 10px 14px; align-items: center;
+  }
+  .hud-speed { grid-area: speed; text-align: center; min-width: 76px; }
+  .hud-speed .num { display: block; font: 700 40px/1 var(--font-data); font-variant-numeric: tabular-nums; }
+  .hud-speed .unit { font-size: 13px; color: var(--muted); }
+  .limit-sign {
+    grid-area: limit; background: #fff; color: #000; border: 3px solid #000; border-radius: 8px;
+    padding: 4px 8px; text-align: center; font-weight: 700; font-size: 10px; line-height: 1.1; min-width: 58px;
+  }
+  .limit-sign b { display: block; font: 700 28px/1.05 var(--font-ui); }
+  .hud-next { grid-area: next; font-size: 17px; font-weight: 500; line-height: 1.3; }
+  .hud-next small { display: block; color: var(--muted); font-weight: 400; font-size: 14px; }
+  .hud-btns { grid-area: btns; display: flex; gap: 10px; }
+  .hud-btns .btn { min-height: 60px; font-size: 18px; flex: 1; border-radius: 30px; }
+  .hud-btns .stop { background: var(--danger); color: #fff; border-color: var(--danger); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .hud-btns .stop { color: #601410; } }
+  :root[data-theme="dark"] .hud-btns .stop { color: #601410; }
+
+  body.driving .app { grid-template-columns: 0 1fr; }
+  body.driving .panel { display: none; }
+
+  /* ---------- safety dialog ---------- */
+  dialog {
+    border: 0; border-radius: 20px; padding: 22px 24px; max-width: min(480px, calc(100% - 32px));
+    background: var(--panel); color: var(--ink); box-shadow: var(--shadow);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.5); }
+  dialog h2 { font-size: 22px; color: var(--ink); font-weight: 500; margin: 0 0 10px; letter-spacing: 0; }
+  dialog ul { padding-left: 20px; margin: 0 0 18px; }
+  dialog li { margin-bottom: 8px; }
+  .dialog-btns { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+
+  /* ---------- phone: Google Maps-style bottom sheet ---------- */
+  @media (max-width: 760px) {
+    .app { display: block; }
+    .map-wrap { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; left: 0; right: 0; bottom: 0; max-height: 82dvh;
+      border-right: 0; border-radius: 20px 20px 0 0; box-shadow: var(--shadow);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .sheet-handle {
+      display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%;
+      background: none; border: 0; padding: 8px 0 0; cursor: pointer; color: var(--muted); font-size: 13px;
+      min-height: 44px;
+    }
+    .sheet-handle::before { content: ""; width: 36px; height: 4px; border-radius: 2px; background: var(--line); }
+    .panel-head { padding: 0 16px 2px; }
+    h1 { font-size: 19px; }
+    .actions { padding: 8px 16px 12px; }
+    section { padding: 12px 16px; }
+    details.settings { padding: 0 16px; }
+    .panel:not(.open) .more, .panel:not(.open) .credits { display: none; }
+    .status { font-size: 13px; }
+    .credits { padding: 14px 16px 20px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 </style>
 </head>
 <body>
-<header>
-  <h1>LA Camera Watch</h1>
-  <div class="layers" role="group" aria-label="Layers">
-    <label class="chip"><input type="checkbox" id="lyr-alpr" checked><span class="dot" style="background:var(--alpr)"></span>ALPR / Flock <span class="count" id="n-alpr">0</span></label>
-    <label class="chip"><input type="checkbox" id="lyr-speed" checked><span class="dot" style="background:var(--speed)"></span>Speed (OSM) <span class="count" id="n-speed">0</span></label>
-    <label class="chip"><input type="checkbox" id="lyr-ladot" checked><span class="dot" style="background:var(--ladot)"></span>LADOT official <span class="count" id="n-ladot">0</span></label>
-  </div>
-  <div class="actions">
-    <button class="primary" id="btn-refresh">Refresh this area</button>
-    <button id="btn-locate">Near me</button>
-    <label class="chip"><input type="checkbox" id="auto"> Auto-refresh 5 min</label>
-  </div>
-  <div class="status" id="status">Loading…</div>
-</header>
-<div class="wrap">
-  <div id="map"></div>
-  <div class="note" id="note" hidden></div>
+<a class="skip" href="#list" id="skip">Skip to camera list</a>
+<div class="app">
+  <aside class="panel" id="panel" aria-label="Camera map controls">
+    <button class="sheet-handle" id="btn-sheet" aria-expanded="false" aria-controls="more">Show list and settings</button>
+    <header class="panel-head">
+      <h1>LA Camera Watch</h1>
+      <p class="status" id="status" role="status" aria-live="polite">Loading cameras…</p>
+    </header>
+    <div class="actions">
+      <button class="btn primary" id="btn-drive" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 11l1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11a2 2 0 0 1 2 2v4a1 1 0 0 1-1 1h-1v1.5a1.5 1.5 0 0 1-3 0V18H8v1.5a1.5 1.5 0 0 1-3 0V18H4a1 1 0 0 1-1-1v-4a2 2 0 0 1 2-2Zm2.1 0h9.8l-1.1-3.4a.9.9 0 0 0-.8-.6H9a.9.9 0 0 0-.8.6ZM6.5 15.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm11 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/></svg>
+        Start drive mode
+      </button>
+      <button class="btn" id="btn-locate" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9 3h-2.07A7 7 0 0 0 13 5.07V3h-2v2.07A7 7 0 0 0 5.07 11H3v2h2.07A7 7 0 0 0 11 18.93V21h2v-2.07A7 7 0 0 0 18.93 13H21Zm-9 6a5 5 0 1 1 0-10 5 5 0 0 1 0 10Z"/></svg>
+        Near me
+      </button>
+      <button class="btn" id="btn-refresh" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4Z"/></svg>
+        Refresh live data
+      </button>
+    </div>
+
+    <div class="more" id="more">
+      <section aria-labelledby="h-layers">
+        <h2 id="h-layers">Show on map and alert for</h2>
+        <div class="filters">
+          <label class="filter">
+            <input type="checkbox" id="lyr-alpr">
+            <span id="key-alpr" aria-hidden="true"></span>
+            <span class="name">Plate readers (ALPR)<small>Square · Flock and other makers</small></span>
+            <span class="count" id="n-alpr" aria-label="in view">0</span>
+          </label>
+          <label class="filter">
+            <input type="checkbox" id="lyr-speed">
+            <span id="key-speed" aria-hidden="true"></span>
+            <span class="name">Speed cameras<small>Circle · from OpenStreetMap</small></span>
+            <span class="count" id="n-speed" aria-label="in view">0</span>
+          </label>
+          <label class="filter">
+            <input type="checkbox" id="lyr-ladot">
+            <span id="key-ladot" aria-hidden="true"></span>
+            <span class="name">LA city speed cameras<small>Diamond · solid is live, outline is coming soon</small></span>
+            <span class="count" id="n-ladot" aria-label="in view">0</span>
+          </label>
+        </div>
+      </section>
+
+      <details class="settings" id="settings">
+        <summary>Drive alerts and display</summary>
+        <div class="set-grid">
+          <label class="set-row">Alert me within
+            <select id="set-dist">
+              <option value="150">500 ft (150 m)</option>
+              <option value="300">1,000 ft (300 m)</option>
+              <option value="500">0.3 mi (500 m)</option>
+              <option value="800">0.5 mi (800 m)</option>
+            </select>
+          </label>
+          <p class="hint">At highway speed you're warned earlier: at least 15 seconds ahead. City cameras still under construction don't trigger alerts.</p>
+          <label class="set-row"><input type="checkbox" id="set-voice"> Spoken alerts</label>
+          <label class="set-row"><input type="checkbox" id="set-chime"> Alert chime</label>
+          <label class="set-row"><input type="checkbox" id="set-vibrate"> Vibrate (Android)</label>
+          <label class="set-row"><input type="checkbox" id="set-big"> Bigger camera icons</label>
+          <label class="set-row">Units
+            <select id="set-units">
+              <option value="imperial">Miles and feet</option>
+              <option value="metric">Kilometers and meters</option>
+            </select>
+          </label>
+        </div>
+      </details>
+
+      <section aria-labelledby="h-list">
+        <h2 id="h-list">Cameras in view <span id="list-count"></span></h2>
+        <ol class="list" id="list" tabindex="-1" aria-labelledby="h-list"></ol>
+      </section>
+    </div>
+
+    <footer class="credits">
+      <p>Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL), much of it added through <a href="https://deflock.me">DeFlock</a>. City sites from <a href="https://ladot.lacity.gov/speed-safety-system">LADOT</a>.</p>
+      <p id="snap-date"></p>
+      <p><a href="https://github.com/geocolon/la-camera-watch">Source code on GitHub</a></p>
+    </footer>
+  </aside>
+
+  <main class="map-wrap" id="map-wrap">
+    <div id="map" role="region" aria-label="Map of cameras. Arrow keys pan, plus and minus zoom. The camera list in the panel is a text version of this map."></div>
+
+    <div class="hud" id="hud" hidden>
+      <div class="alert" id="alert" hidden aria-hidden="true">
+        <span id="alert-icon"></span>
+        <div><div class="alert-title" id="alert-title"></div><div class="alert-sub" id="alert-sub"></div></div>
+        <div class="alert-dist" id="alert-dist"></div>
+      </div>
+      <div class="sr-only" id="alert-sr" role="alert"></div>
+      <div class="hud-bar" id="hud-bar">
+        <div class="hud-speed"><span class="num" id="hud-speed">–</span><span class="unit" id="hud-unit">mph</span></div>
+        <div class="limit-sign" id="hud-limit" hidden><span aria-hidden="true">SPEED<br>LIMIT</span><b id="hud-limit-n"></b><span class="sr-only"> speed limit</span></div>
+        <div class="hud-next" id="hud-next">Waiting for GPS…</div>
+        <div class="hud-btns">
+          <button class="btn" id="btn-recenter" type="button" hidden>Re-center</button>
+          <button class="btn" id="btn-voice" type="button" aria-pressed="true">Voice on</button>
+          <button class="btn stop" id="btn-stop" type="button">Stop</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="note" id="note" role="status" aria-live="polite" hidden><span id="note-text"></span><button type="button" id="note-close" aria-label="Dismiss message">×</button></div>
+  </main>
 </div>
 
+<dialog id="safety" aria-labelledby="safety-h">
+  <h2 id="safety-h">Before you drive</h2>
+  <ul>
+    <li>Set everything up while parked. Don't touch your phone while driving: alerts are spoken out loud.</li>
+    <li>Mount your phone and keep this page open on screen. Phones pause web pages that are locked or in the background, and then alerts stop.</li>
+    <li>Camera data comes from volunteers and the city. Some cameras are missing or out of date, so always follow posted speed limits.</li>
+    <li>The page doesn't save or upload your location. Map tiles and live camera lookups for your area come from OpenStreetMap servers, which see the area shown, like any online map.</li>
+  </ul>
+  <div class="dialog-btns">
+    <button class="btn" id="safety-cancel" type="button">Cancel</button>
+    <button class="btn primary" id="safety-ok" type="button">Start drive mode</button>
+  </div>
+</dialog>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
 <script>
 // ---------- configuration ----------
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.private.coffee/api/interpreter",
 ];
-// LADOT's public ArcGIS web map (linked from ladot.lacity.gov/speed-safety-system)
-const LADOT_WEBMAP_ID = "1782595f9631429696a3d269e4c9aea5";
+const SNAPSHOT_URL = "data/cameras.json";
 const LADOT_PAGE = "https://ladot.lacity.gov/speed-safety-system";
-const MIN_ZOOM_FOR_QUERY = 11;        // keep queries small and polite
-const AUTO_REFRESH_MS = 5 * 60 * 1000;
-const REQUEST_TIMEOUT_MS = 30 * 1000; // per mirror, then try the next one
+const MIN_ZOOM_FOR_QUERY = 11;        // keep live queries small and polite
+const REQUEST_TIMEOUT_MS = 45 * 1000; // per mirror, then try the next one
 const START = { lat: 34.05, lon: -118.30, zoom: 12 };
+const KINDS = ["alpr", "speed", "ladot"];
+// Okabe-Ito palette; the glyph color on each is picked for contrast (white on blue, black on orange/pink)
+const COLORS = { alpr: "#0072B2", speed: "#E69F00", ladot: "#CC79A7" };
+const GLYPH = { alpr: "#ffffff", speed: "#000000", ladot: "#000000" };
+const PLURAL = { alpr: "license plate readers", speed: "speed cameras", ladot: "LA city speed cameras" };
+const SPOKEN = { alpr: "License plate reader", speed: "Speed camera", ladot: "City speed camera" };
+const LADOT_STATUS = { "Warning Live": "Live (warning period)", "Under Construction": "Under construction" };
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const phone = matchMedia("(max-width: 760px)");
 
 // ---------- helpers ----------
 const $ = (id) => document.getElementById(id);
-const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
-function setStatus(text, live = false) { const el = $("status"); el.textContent = text; el.classList.toggle("live", live); }
-function note(text) { const el = $("note"); el.hidden = !text; if (text) el.innerHTML = text; }
 function store(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
 function recall(key) { try { return JSON.parse(localStorage.getItem(key)); } catch (e) { return null; } }
+function setStatus(text) { $("status").textContent = text; }
+function note(html) { $("note").hidden = !html; $("note-text").innerHTML = html || ""; }
+const clock = () => new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+const settings = Object.assign(
+  { alpr: true, speed: true, ladot: true, alertDist: 300, voice: true, chime: true, vibrate: true, big: false, units: "imperial" },
+  recall("cam-settings") || {});
+const saveSettings = () => store("cam-settings", settings);
+
+// ---------- geometry ----------
+const toRad = (d) => d * Math.PI / 180;
+function distM(aLat, aLon, bLat, bLon) {
+  const x = toRad(bLon - aLon) * Math.cos(toRad((aLat + bLat) / 2)), y = toRad(bLat - aLat);
+  return Math.hypot(x, y) * 6371000;
+}
+function bearing(aLat, aLon, bLat, bLon) {
+  const y = Math.sin(toRad(bLon - aLon)) * Math.cos(toRad(bLat));
+  const x = Math.cos(toRad(aLat)) * Math.sin(toRad(bLat)) - Math.sin(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.cos(toRad(bLon - aLon));
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+const angleDiff = (a, b) => Math.abs(((a - b + 540) % 360) - 180);
+const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+const compass = (deg) => COMPASS[Math.round(deg / 45) % 8];
+const COMPASS16 = { N:0, NNE:22.5, NE:45, ENE:67.5, E:90, ESE:112.5, SE:135, SSE:157.5,
+  S:180, SSW:202.5, SW:225, WSW:247.5, W:270, WNW:292.5, NW:315, NNW:337.5 };
+function parseDirs(v) {
+  if (!v) return [];
+  return String(v).split(";").map(s => s.trim().toUpperCase())
+    .map(s => /^-?\d+(\.\d+)?$/.test(s) ? ((+s % 360) + 360) % 360 : (s in COMPASS16 ? COMPASS16[s] : null))
+    .filter(d => d !== null).slice(0, 3);
+}
+function inRing(lat, lon, ring) {   // ring is [[lon, lat], ...]
+  let hit = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [x1, y1] = ring[i], [x2, y2] = ring[j];
+    if ((y1 > lat) !== (y2 > lat) && lon < (x2 - x1) * (lat - y1) / (y2 - y1) + x1) hit = !hit;
+  }
+  return hit;
+}
+function fmtDist(m, spoken = false) {
+  if (settings.units === "metric") {
+    if (m < 1000) { const v = Math.max(50, Math.round(m / 50) * 50); return spoken ? `${v} meters` : `${v} m`; }
+    const v = (m / 1000).toFixed(m < 10000 ? 1 : 0); return spoken ? `${v} kilometers` : `${v} km`;
+  }
+  const ft = m * 3.28084;
+  if (ft < 1000) { const v = Math.max(50, Math.round(ft / 50) * 50); return spoken ? `${v} feet` : `${v} ft`; }
+  const v = (m / 1609.344).toFixed(m < 16093 ? 1 : 0);
+  return spoken ? `${v} ${v === "1.0" ? "mile" : "miles"}` : `${v} mi`;
+}
+
+// ---------- camera icons: shape + color + camera glyph, so color is never the only cue ----------
+function shapeSvg(kind, live = true) {
+  const c = COLORS[kind];
+  if (kind === "alpr") return `<rect x="14" y="14" width="36" height="36" rx="8" fill="${c}" stroke="#fff" stroke-width="3"/>`;
+  if (kind === "speed") return `<circle cx="32" cy="32" r="19" fill="${c}" stroke="#fff" stroke-width="3"/>`;
+  return live
+    ? `<path d="M32 9 55 32 32 55 9 32Z" fill="${c}" stroke="#fff" stroke-width="3" stroke-linejoin="round"/>`
+    : `<path d="M32 10 54 32 32 54 10 32Z" fill="#fff" stroke="${c}" stroke-width="5" stroke-linejoin="round"/>`;
+}
+function glyphSvg(kind, live = true) {
+  const ink = kind === "ladot" && !live ? "#6d2a57" : GLYPH[kind];
+  const hole = kind === "ladot" && !live ? "#fff" : COLORS[kind];
+  const s = kind === "ladot" ? 0.82 : 1;   // the diamond has less room inside
+  return `<g transform="translate(32 32) scale(${s}) translate(-32 -32)" fill="${ink}">
+    <rect x="21" y="25" width="22" height="15" rx="3"/><rect x="27" y="21.5" width="10" height="5" rx="1.5"/>
+    <circle cx="32" cy="32.5" r="5" fill="${hole}"/><circle cx="32" cy="32.5" r="2.2"/></g>`;
+}
+function wedgeSvg(kind, deg) {   // shows which way the camera points
+  return `<path d="M32 2 41 14 23 14Z" fill="${COLORS[kind]}" stroke="#fff" stroke-width="2" stroke-linejoin="round" transform="rotate(${deg} 32 32)"/>`;
+}
+function camSvg(kind, { live = true, dirs = [], count = null } = {}) {
+  const inner = count === null ? glyphSvg(kind, live)
+    : `<text x="32" y="${count > 99 ? 37 : 38.5}" text-anchor="middle" font-family="Roboto, Arial, sans-serif" font-weight="700"
+         font-size="${count > 999 ? 12 : count > 99 ? 15 : 18}" fill="${GLYPH[kind]}">${count > 9999 ? "9k+" : count}</text>`;
+  return `<svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">${dirs.map(d => wedgeSvg(kind, d)).join("")}${shapeSvg(kind, live)}${inner}</svg>`;
+}
+const iconCache = new Map();
+function camIcon(cam) {
+  const size = settings.big ? 84 : 62;
+  const key = `${cam.kind}|${cam.live}|${cam.dirs.join(",")}|${size}|${cam.title}`;
+  if (!iconCache.has(key)) iconCache.set(key, L.divIcon({
+    className: "cam", iconSize: [size, size], iconAnchor: [size / 2, size / 2], popupAnchor: [0, -size * 0.3],
+    html: camSvg(cam.kind, cam) + `<span class="sr-only">${esc(cam.title)}${cam.kind === "ladot" ? ", " + (cam.live ? "live" : "under construction") : ""}</span>`,
+  }));
+  return iconCache.get(key);
+}
+function clusterIcon(kind, n) {
+  const size = settings.big ? 78 : 58;
+  return L.divIcon({
+    className: "cam", iconSize: [size, size],
+    html: camSvg(kind, { count: n }) + `<span class="sr-only">${n} ${PLURAL[kind]}. Press Enter to zoom in.</span>`,
+  });
+}
 
 // ---------- map ----------
 const saved = recall("cam-view");
-const map = L.map("map", { zoomControl: true }).setView(
-  saved ? [saved.lat, saved.lon] : [START.lat, START.lon], saved ? saved.zoom : START.zoom);
+const map = L.map("map", { zoomControl: false, attributionControl: false, keyboard: true })
+  .setView(saved ? [saved.lat, saved.lon] : [START.lat, START.lon], saved ? saved.zoom : START.zoom);
+L.control.zoom({ position: "bottomright" }).addTo(map);
+L.control.attribution({ position: "bottomleft" }).addTo(map);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 }).addTo(map);
 map.on("moveend", () => { const c = map.getCenter(); store("cam-view", { lat: c.lat, lon: c.lng, zoom: map.getZoom() }); });
 
-const layers = { alpr: L.layerGroup().addTo(map), speed: L.layerGroup().addTo(map), ladot: L.layerGroup().addTo(map) };
-for (const key of Object.keys(layers)) {
-  $("lyr-" + key).addEventListener("change", e => e.target.checked ? layers[key].addTo(map) : map.removeLayer(layers[key]));
+const groups = {};
+for (const kind of KINDS) {
+  groups[kind] = L.markerClusterGroup({
+    maxClusterRadius: 48, disableClusteringAtZoom: 15, showCoverageOnHover: false,
+    spiderfyOnMaxZoom: true, chunkedLoading: true,
+    iconCreateFunction: (cl) => clusterIcon(kind, cl.getChildCount()),
+  });
+}
+const corridorLayer = L.featureGroup();
+
+// ---------- camera data ----------
+let cams = [];
+const camByKey = new Map();
+let snapBounds = null;
+let corridors = [];
+
+function osmCam(id, lat, lon, kind, tags) {
+  const maker = tags.manufacturer || tags.brand;
+  return {
+    key: "n" + id, osmId: id, kind, lat, lon, tags, live: true,
+    dirs: parseDirs(tags["camera:direction"] || tags.direction),
+    title: kind === "alpr" ? `License plate reader${maker ? ` (${maker})` : ""}` : "Speed camera",
+  };
+}
+function ladotCam(c) {
+  const corr = c.corridor != null ? corridors[c.corridor] : null;
+  return {
+    key: "L" + c.id, siteId: c.id, kind: "ladot", lat: c.lat, lon: c.lon, dirs: [],
+    live: /live/i.test(c.status || ""), status: c.status, corridor: corr,
+    title: corr && corr.street ? `LA city speed camera, ${corr.street}` : "LA city speed camera",
+  };
+}
+function makeMarker(cam) {
+  const m = L.marker([cam.lat, cam.lon], { icon: camIcon(cam), title: cam.title, keyboard: true, riseOnHover: true });
+  m.bindPopup(() => popupHtml(cam), { maxWidth: 320, autoPanPaddingTopLeft: [20, 70], autoPanPaddingBottomRight: [20, 40] });
+  cam.marker = m;
+  return m;
+}
+function addCams(list) {
+  for (const cam of list) { camByKey.set(cam.key, cam); makeMarker(cam); }
+  cams = cams.concat(list);
+  for (const kind of KINDS) groups[kind].addLayers(list.filter(c => c.kind === kind).map(c => c.marker));
+}
+function removeCams(list) {
+  const keys = new Set(list.map(c => c.key));
+  for (const kind of KINDS) groups[kind].removeLayers(list.filter(c => c.kind === kind).map(c => c.marker));
+  for (const k of keys) camByKey.delete(k);
+  cams = cams.filter(c => !keys.has(c.key));
 }
 
-// A dot plus, when OSM has a `direction` tag, a short line showing where the camera points.
-function cameraMarker(lat, lon, color, direction) {
-  const group = L.layerGroup();
-  const deg = parseFloat(direction);
-  if (!Number.isNaN(deg)) {
-    const rad = deg * Math.PI / 180, len = 0.0006;   // roughly 60 m
-    const tip = [lat + len * Math.cos(rad), lon + len * Math.sin(rad) / Math.cos(lat * Math.PI / 180)];
-    L.polyline([[lat, lon], tip], { color, weight: 3, opacity: .8 }).addTo(group);
+function popupHtml(cam) {
+  const rows = [], t = cam.tags || {};
+  if (cam.kind === "ladot") {
+    rows.push(["Status", LADOT_STATUS[cam.status] || cam.status || "Unknown"]);
+    const k = cam.corridor;
+    if (k) {
+      if (k.street) rows.push(["Street", k.street + (k.from && k.to ? `, ${k.from} to ${k.to}` : "")]);
+      if (k.limit) rows.push(["Speed limit", `${k.limit} mph`]);
+      if (k.school) rows.push(["School nearby", "Yes"]);
+    }
+    rows.push(["Site", cam.siteId]);
+  } else {
+    if (t.operator) rows.push(["Operator", t.operator]);
+    if (t.manufacturer || t.brand) rows.push(["Maker", t.manufacturer || t.brand]);
+    if (cam.dirs.length) rows.push(["Faces", cam.dirs.map(d => `${compass(d)} (${Math.round(d)}°)`).join(", ")]);
+    if (t.maxspeed) rows.push(["Speed limit", t.maxspeed]);
+    if (t["surveillance:zone"]) rows.push(["Watches", t["surveillance:zone"]]);
+    if (t.check_date) rows.push(["Last checked", t.check_date]);
   }
-  return { group, dot: L.circleMarker([lat, lon], { radius: 7, color: "#fff", weight: 2, fillColor: color, fillOpacity: 1 }).addTo(group) };
+  const gmaps = `https://www.google.com/maps/search/?api=1&query=${cam.lat},${cam.lon}`;
+  const links = [`<a href="${gmaps}" target="_blank" rel="noopener">Open in Google Maps</a>`];
+  if (cam.osmId) links.push(`<a href="https://www.openstreetmap.org/node/${cam.osmId}" target="_blank" rel="noopener">View or fix on OpenStreetMap</a>`);
+  else links.push(`<a href="${LADOT_PAGE}" target="_blank" rel="noopener">LADOT program page</a>`);
+  const tagRows = Object.entries(t).sort().map(([k, v]) => `${esc(k)} = ${esc(v)}`).join("<br>");
+  return `<div class="pop"><h3 tabindex="-1">${camSvg(cam.kind, cam)}${esc(cam.title)}</h3>
+    <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    <p class="links">${links.join("")}</p>
+    ${tagRows ? `<details><summary>OpenStreetMap tags</summary><div class="tags">${tagRows}</div></details>` : ""}</div>`;
 }
 
-// ---------- OpenStreetMap via Overpass ----------
+async function loadSnapshot() {
+  try {
+    const res = await fetch(SNAPSHOT_URL, { cache: "no-cache" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const snap = await res.json();
+    const [s, w, n, e] = snap.bbox;
+    snapBounds = L.latLngBounds([s, w], [n, e]);
+    corridors = snap.corridors.map(c => {
+      const pts = c.rings.flat();
+      return Object.assign(c, {
+        bb: [Math.min(...pts.map(p => p[1])), Math.min(...pts.map(p => p[0])), Math.max(...pts.map(p => p[1])), Math.max(...pts.map(p => p[0]))],
+      });
+    });
+    for (const c of corridors) {
+      L.polygon(c.rings.map(r => r.map(([x, y]) => [y, x])), {
+        color: COLORS.ladot, weight: 2, dashArray: "6 5", fillOpacity: 0.12, interactive: false,
+      }).addTo(corridorLayer);
+    }
+    addCams(snap.osm.map(([id, lat, lon, kind, tags]) => osmCam(id, lat, lon, kind, tags)).concat(snap.ladot.map(ladotCam)));
+    const date = new Date(snap.generated).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+    $("snap-date").textContent = `LA camera data updated ${date}. Press “Refresh live data” for the latest edits in view.`;
+    const total = (k) => cams.filter(c => c.kind === k).length.toLocaleString();
+    setStatus(`${total("alpr")} plate readers, ${total("speed")} speed cameras and ${total("ladot")} city sites · data from ${date}`);
+  } catch (e) {
+    console.warn("Snapshot unavailable:", e);
+    setStatus("Couldn't load saved camera data. Getting live data…");
+    if (map.getZoom() >= MIN_ZOOM_FOR_QUERY) loadLive(map.getBounds());
+  }
+  syncLayers();
+  renderList();
+}
+
+// ---------- live data from OpenStreetMap via Overpass ----------
 function buildQuery(b) {
   // Overpass bbox order is south,west,north,east
   const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(n => n.toFixed(5)).join(",");
@@ -215,89 +715,389 @@ async function overpass(query) {
   throw lastErr;
 }
 
-async function loadOSM() {
-  if (map.getZoom() < MIN_ZOOM_FOR_QUERY) {
-    note("Zoom in a bit (city level or closer) and press <b>Refresh this area</b>. Big areas overload the free Overpass servers.");
-    return;
-  }
-  note("");
+let liveBusy = false;
+const liveBoxes = [];   // areas already fetched live this session
+async function loadLive(bounds, { quiet = false } = {}) {
+  if (liveBusy) return;
+  liveBusy = true;
   $("btn-refresh").disabled = true;
-  setStatus("Asking OpenStreetMap…");
+  setStatus("Getting live data from OpenStreetMap…");
   try {
-    const elements = await overpass(buildQuery(map.getBounds()));
-    layers.alpr.clearLayers(); layers.speed.clearLayers();
-    let nA = 0, nS = 0;
-    for (const el of elements) {
-      const t = el.tags || {};
-      const isALPR = t["surveillance:type"] === "ALPR";
-      const color = isALPR ? css("--alpr") : css("--speed");
-      const title = isALPR ? `License plate reader (${t.manufacturer || t.brand || "maker unknown"})` : "Speed camera";
-      const { group, dot } = cameraMarker(el.lat, el.lon, color, t["camera:direction"] || t.direction);
-      const rows = Object.entries(t).sort().map(([k, v]) => `${esc(k)} = ${esc(v)}`).join("<br>");
-      dot.bindPopup(`<h3>${esc(title)}</h3><div class="tags">${rows}</div>
-        <p><a href="https://www.openstreetmap.org/node/${el.id}" target="_blank" rel="noopener">View or fix on OpenStreetMap</a></p>`);
-      group.addTo(isALPR ? layers.alpr : layers.speed);
-      isALPR ? nA++ : nS++;
-    }
-    $("n-alpr").textContent = nA; $("n-speed").textContent = nS;
-    setStatus(`Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`, true);
-    if (!elements.length) note("No mapped cameras in this view yet. Spot one? Add it with the DeFlock app.");
+    const elements = await overpass(buildQuery(bounds));
+    const fresh = elements.map(el => osmCam(el.id, el.lat, el.lon,
+      (el.tags || {})["surveillance:type"] === "ALPR" ? "alpr" : "speed", el.tags || {}));
+    const freshKeys = new Set(fresh.map(c => c.key));
+    removeCams(cams.filter(c => c.kind !== "ladot" && (bounds.contains([c.lat, c.lon]) || freshKeys.has(c.key))));
+    addCams(fresh);
+    liveBoxes.push(bounds);
+    setStatus(`Live data for this area at ${clock()}: ${fresh.length.toLocaleString()} cameras from OpenStreetMap`);
+    renderList();
   } catch (e) {
-    setStatus("OpenStreetMap request failed");
-    note(`Couldn't reach Overpass (${esc(e.message)}). The free servers get busy; wait a minute and press <b>Refresh this area</b>.`);
+    setStatus("Live data unavailable right now");
+    if (!quiet) note(`Couldn't reach OpenStreetMap (${esc(e.message)}). The free servers get busy; the saved LA data still works. Try again in a minute.`);
   } finally {
+    liveBusy = false;
     $("btn-refresh").disabled = false;
   }
 }
 
-// ---------- LADOT official speed camera sites (ArcGIS) ----------
-async function loadLADOT() {
-  try {
-    const item = await (await fetch(`https://www.arcgis.com/sharing/rest/content/items/${LADOT_WEBMAP_ID}/data?f=json`)).json();
-    const ops = item.operationalLayers || [];
-    let n = 0;
-    for (const op of ops) {
-      if (!op.url || !/FeatureServer|MapServer/.test(op.url)) continue;
-      const base = /\/\d+$/.test(op.url) ? op.url : op.url + "/0";
-      const q = `${base}/query?where=1%3D1&outFields=*&outSR=4326&f=geojson`;
-      const gj = await (await fetch(q)).json();
-      L.geoJSON(gj, {
-        pointToLayer: (f, latlng) => L.circleMarker(latlng, { radius: 6, color: "#fff", weight: 2, fillColor: css("--ladot"), fillOpacity: 1 }),
-        style: () => ({ color: css("--ladot"), weight: 4, opacity: .85 }),
-        onEachFeature: (f, layer) => {
-          n++;
-          const rows = Object.entries(f.properties || {}).filter(([, v]) => v !== null && v !== "")
-            .map(([k, v]) => `${esc(k)}: ${esc(v)}`).join("<br>");
-          layer.bindPopup(`<h3>LADOT speed safety site</h3><div class="tags">${rows}</div>
-            <p><a href="${LADOT_PAGE}" target="_blank" rel="noopener">LADOT program page</a></p>`);
-        },
-      }).addTo(layers.ladot);
+// Browsing outside the snapshot area: fetch live data for the view automatically.
+let autoTimer = null;
+map.on("moveend", () => {
+  clearTimeout(autoTimer);
+  if (driving || !snapBounds || map.getZoom() < MIN_ZOOM_FOR_QUERY) return;
+  const view = map.getBounds();
+  if (snapBounds.contains(view) || liveBoxes.some(b => b.contains(view))) return;
+  autoTimer = setTimeout(() => loadLive(view.pad(0.2), { quiet: true }), 1200);
+});
+
+// ---------- layers, legend and settings ----------
+function syncLayers() {
+  for (const kind of KINDS) {
+    if (settings[kind]) map.addLayer(groups[kind]); else map.removeLayer(groups[kind]);
+  }
+  if (settings.ladot && map.getZoom() >= 13) map.addLayer(corridorLayer); else map.removeLayer(corridorLayer);
+}
+map.on("zoomend", syncLayers);
+
+for (const kind of KINDS) {
+  $("key-" + kind).innerHTML = camSvg(kind);
+  const box = $("lyr-" + kind);
+  box.checked = settings[kind];
+  box.addEventListener("change", () => { settings[kind] = box.checked; saveSettings(); syncLayers(); renderList(); });
+}
+$("set-dist").value = String(settings.alertDist);
+$("set-dist").addEventListener("change", e => { settings.alertDist = +e.target.value; saveSettings(); });
+$("set-units").value = settings.units;
+$("set-units").addEventListener("change", e => { settings.units = e.target.value; saveSettings(); renderList(); updateHud(); });
+for (const key of ["voice", "chime", "vibrate", "big"]) {
+  const box = $("set-" + key);
+  box.checked = settings[key];
+  box.addEventListener("change", () => {
+    settings[key] = box.checked; saveSettings();
+    if (key === "voice") syncVoiceButton();
+    if (key === "big") {
+      iconCache.clear();
+      for (const cam of cams) cam.marker.setIcon(camIcon(cam));
+      for (const kind of KINDS) groups[kind].refreshClusters();
     }
-    $("n-ladot").textContent = n;
-    if (!n) throw new Error("no features");
-  } catch (e) {
-    $("n-ladot").textContent = "–";
-    console.warn("LADOT layer unavailable:", e);
-    note(`The LADOT layer didn't load. See the official list at <a href="${LADOT_PAGE}" target="_blank" rel="noopener">ladot.lacity.gov</a>.`);
+  });
+}
+
+// ---------- "Cameras in view" list: the text version of the map ----------
+const LIST_MAX = 50;
+let listTimer = null, returnFocusKey = null;
+function refPoint() {
+  if (userPos) return { lat: userPos.lat, lon: userPos.lon, label: "from you" };
+  const c = map.getCenter();
+  return { lat: c.lat, lon: c.lng, label: "from map center" };
+}
+function renderList() {
+  const b = map.getBounds(), r = refPoint();
+  const inView = cams.filter(c => b.contains([c.lat, c.lon]));
+  for (const kind of KINDS) $("n-" + kind).textContent = inView.filter(c => c.kind === kind).length.toLocaleString();
+  const vis = inView.filter(c => settings[c.kind]);
+  for (const c of vis) c._d = distM(r.lat, r.lon, c.lat, c.lon);
+  vis.sort((a, b) => a._d - b._d);
+  const top = vis.slice(0, LIST_MAX);
+  $("list-count").textContent = vis.length > LIST_MAX ? `(nearest ${LIST_MAX} of ${vis.length.toLocaleString()}, ${r.label})`
+    : vis.length ? `(${vis.length}, ${r.label})` : "";
+  const focusedKey = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.key : null;
+  $("list").innerHTML = top.map(c => `<li><button type="button" class="item" data-key="${c.key}">${camSvg(c.kind, c)}
+      <span><span class="item-title">${esc(c.title)}</span>
+      <span class="item-meta">${fmtDist(c._d)} ${compass(bearing(r.lat, r.lon, c.lat, c.lon))}${c.kind === "ladot" ? " · " + (c.live ? "Live" : "Under construction") : ""}</span></span>
+    </button></li>`).join("") || `<li class="empty">No cameras shown in this part of the map. Zoom out, move the map or turn on more camera types.</li>`;
+  if (focusedKey) { const el = $("list").querySelector(`[data-key="${focusedKey}"]`); if (el) el.focus(); }
+}
+map.on("moveend", () => { clearTimeout(listTimer); listTimer = setTimeout(renderList, 150); });
+
+function showCam(cam) {
+  returnFocusKey = cam.key;
+  if (phone.matches) openSheet(false);
+  const open = () => {
+    cam.marker.openPopup();
+    const h = document.querySelector(".leaflet-popup .pop h3");
+    if (h) h.focus();
+  };
+  if (map.getZoom() < 16) map.setView([cam.lat, cam.lon], 16, { animate: false });
+  groups[cam.kind].zoomToShowLayer(cam.marker, open);
+}
+$("list").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-key]");
+  if (btn && camByKey.has(btn.dataset.key)) showCam(camByKey.get(btn.dataset.key));
+});
+map.on("popupclose", () => {
+  if (!returnFocusKey) return;
+  const key = returnFocusKey; returnFocusKey = null;
+  if (phone.matches) openSheet(true);
+  const el = $("list").querySelector(`[data-key="${key}"]`);
+  if (el) el.focus();
+});
+
+// ---------- bottom sheet (phone) ----------
+function openSheet(open) {
+  $("panel").classList.toggle("open", open);
+  $("btn-sheet").setAttribute("aria-expanded", String(open));
+  $("btn-sheet").textContent = open ? "Hide list and settings" : "Show list and settings";
+}
+$("btn-sheet").addEventListener("click", () => openSheet(!$("panel").classList.contains("open")));
+$("skip").addEventListener("click", () => { if (phone.matches) openSheet(true); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && phone.matches && $("panel").classList.contains("open") && !document.querySelector(".leaflet-popup")) {
+    openSheet(false); $("btn-sheet").focus();
+  }
+});
+// Keep Leaflet's bottom controls above the sheet or the drive bar.
+function updateInset() {
+  const el = driving ? $("hud-bar") : phone.matches ? $("panel") : null;
+  document.documentElement.style.setProperty("--inset-bottom", (el ? el.offsetHeight : 0) + "px");
+}
+new ResizeObserver(updateInset).observe($("panel"));
+new ResizeObserver(updateInset).observe($("hud-bar"));
+phone.addEventListener("change", () => { updateInset(); map.invalidateSize(); });
+$("note-close").addEventListener("click", () => note(""));
+
+// ---------- your location ----------
+let userPos = null, lastFix = null, userMarker = null, accCircle = null, lastHeadingDrawn = null;
+function meIcon(heading) {
+  const body = heading == null
+    ? `<circle cx="24" cy="24" r="10" fill="#1f1f1f" stroke="#fff" stroke-width="3.5"/>`
+    : `<path d="M24 5 37 39 24 31 11 39Z" fill="#1f1f1f" stroke="#fff" stroke-width="3" stroke-linejoin="round" transform="rotate(${heading} 24 24)"/>`;
+  return L.divIcon({ className: "me", iconSize: [48, 48],
+    html: `<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="23" fill="rgba(11,87,208,.18)"/>${body}</svg>` });
+}
+function showUser() {
+  const { lat, lon, acc, heading } = userPos;
+  if (!userMarker) {
+    accCircle = L.circle([lat, lon], { radius: acc, interactive: false, weight: 1, color: "#5f6368", fillOpacity: 0.08 }).addTo(map);
+    userMarker = L.marker([lat, lon], { icon: meIcon(heading), interactive: false, keyboard: false, zIndexOffset: 2000 }).addTo(map);
+  } else {
+    accCircle.setLatLng([lat, lon]).setRadius(acc);
+    userMarker.setLatLng([lat, lon]);
+  }
+  const rounded = heading == null ? null : Math.round(heading / 5) * 5;
+  if (rounded !== lastHeadingDrawn) { userMarker.setIcon(meIcon(rounded)); lastHeadingDrawn = rounded; }
+}
+function onFix(p) {
+  const { latitude: lat, longitude: lon, accuracy } = p.coords;
+  let speed = Number.isFinite(p.coords.speed) ? p.coords.speed : null;
+  let heading = Number.isFinite(p.coords.heading) && (speed == null || speed > 1) ? p.coords.heading : null;
+  if (lastFix) {   // fill gaps from movement since the last fix
+    const d = distM(lastFix.lat, lastFix.lon, lat, lon), dt = (p.timestamp - lastFix.t) / 1000;
+    if (speed == null && dt > 0) speed = d / dt;
+    if (heading == null && d > 10) heading = bearing(lastFix.lat, lastFix.lon, lat, lon);
+  }
+  if (heading == null && userPos && speed > 2) heading = userPos.heading;
+  if (!lastFix || distM(lastFix.lat, lastFix.lon, lat, lon) > 10) lastFix = { lat, lon, t: p.timestamp };
+  userPos = { lat, lon, acc: accuracy, speed, heading };
+  showUser();
+  if (driving) {
+    if (follow) followView();
+    updateHud();
+    checkAlerts();
+    maybeFetchAround(lat, lon);
+  }
+}
+function geoError(err) {
+  const msg = err.code === 1
+    ? "Location is blocked. Allow location for this site in your browser settings (iPhone: Settings → Privacy → Location Services → Safari Websites)."
+    : "Couldn't get your location. Check that location is on and try again.";
+  note(msg);
+  if (driving) $("hud-next").textContent = "No GPS signal";
+}
+$("btn-locate").addEventListener("click", () => {
+  if (!navigator.geolocation) return note("This browser can't share your location.");
+  setStatus("Finding your location…");
+  navigator.geolocation.getCurrentPosition(p => {
+    onFix(p);
+    map.setView([userPos.lat, userPos.lon], 15, { animate: !reduceMotion });
+    setStatus("Showing cameras near you");
+  }, geoError, { enableHighAccuracy: true, timeout: 15000 });
+});
+$("btn-refresh").addEventListener("click", () => {
+  if (map.getZoom() < MIN_ZOOM_FOR_QUERY) return note("Zoom in to city level or closer, then press <b>Refresh live data</b>. Big areas overload the free servers.");
+  note("");
+  loadLive(map.getBounds());
+});
+
+// ---------- drive mode ----------
+let driving = false, follow = true, watchId = null, wakeLock = null, audioCtx = null;
+let activeAlert = null, lastLiveCenter = null;
+const alerted = new Set();
+
+// Keep you below the middle of the screen so you see more of the road ahead (the map stays north-up).
+function followView(zoom = Math.max(map.getZoom(), 15)) {
+  const { lat, lon, heading } = userPos;
+  let center = map.project([lat, lon], zoom);
+  if (heading != null) {
+    const k = map.getSize().y * 0.22, h = toRad(heading);
+    center = center.add([Math.sin(h) * k, -Math.cos(h) * k]);
+  }
+  map.setView(map.unproject(center, zoom), zoom, { animate: !reduceMotion });
+}
+function alertRadius() { return Math.max(settings.alertDist, (userPos && userPos.speed || 0) * 15); }
+function isAhead(c, d) {
+  const { lat, lon, speed, heading } = userPos;
+  if (heading == null || !(speed > 2.5) || d < 40) return true;   // stopped or unsure: anything close counts
+  return angleDiff(heading, bearing(lat, lon, c.lat, c.lon)) <= 50;
+}
+function alertable(c) { return settings[c.kind] && (c.kind !== "ladot" || c.live); }
+
+function updateHud() {
+  if (!driving) return;
+  const metric = settings.units === "metric";
+  $("hud-unit").textContent = metric ? "km/h" : "mph";
+  const spd = userPos && userPos.speed;
+  $("hud-speed").textContent = spd == null ? "–" : Math.round(spd * (metric ? 3.6 : 2.23694));
+  let limit = null;
+  if (userPos) {
+    const { lat, lon } = userPos;
+    const corr = corridors.find(c => lat >= c.bb[0] && lat <= c.bb[2] && lon >= c.bb[1] && lon <= c.bb[3] && c.rings.some(r => inRing(lat, lon, r)));
+    if (corr && corr.limit) limit = corr.limit;
+  }
+  $("hud-limit").hidden = limit == null;
+  $("hud-limit-n").textContent = limit || "";
+}
+
+function checkAlerts() {
+  const { lat, lon } = userPos;
+  const radius = alertRadius();
+  let next = null;
+  const hits = [];
+  for (const c of cams) {
+    if (!alertable(c) || Math.abs(c.lat - lat) > 0.03 || Math.abs(c.lon - lon) > 0.04) continue;   // ~3 km box first
+    const d = distM(lat, lon, c.lat, c.lon);
+    if (!isAhead(c, d)) continue;
+    if (!next || d < next.d) next = { c, d };
+    if (d <= radius && !alerted.has(c.key)) hits.push({ c, d });
+  }
+  for (const key of alerted) {   // forget cameras you've left behind so they can alert again next trip
+    const c = camByKey.get(key);
+    if (!c || distM(lat, lon, c.lat, c.lon) > radius * 2 + 150) alerted.delete(key);
+  }
+  $("hud-next").innerHTML = next
+    ? `${esc(SPOKEN[next.c.kind])} ahead<small>${fmtDist(next.d)}${next.c.corridor && next.c.corridor.street ? " · " + esc(next.c.corridor.street) : ""}</small>`
+    : `No cameras ahead<small>within 2 miles</small>`;
+  if (hits.length) {
+    hits.sort((a, b) => a.d - b.d);
+    for (const h of hits) alerted.add(h.c.key);
+    fireAlert(hits[0], hits.length - 1);
+  }
+  if (activeAlert) {
+    const c = activeAlert.c, d = distM(lat, lon, c.lat, c.lon);
+    const passed = (!isAhead(c, d) && d > 40) || d > radius * 2 || Date.now() - activeAlert.at > 30000;
+    if (passed) { $("alert").hidden = true; activeAlert = null; }
+    else $("alert-dist").textContent = fmtDist(d);
   }
 }
 
-// ---------- controls ----------
-$("btn-refresh").addEventListener("click", loadOSM);
-$("btn-locate").addEventListener("click", () => {
-  if (!navigator.geolocation) return note("This browser can't share your location.");
-  navigator.geolocation.getCurrentPosition(
-    p => { map.setView([p.coords.latitude, p.coords.longitude], 14); setTimeout(loadOSM, 300); },
-    () => note("Location was blocked. Pan the map by hand, then press <b>Refresh this area</b>."));
+function fireAlert({ c, d }, more) {
+  const limit = c.corridor && c.corridor.limit;
+  const sub = [c.corridor && c.corridor.street, limit && `Limit ${limit} mph`, more > 0 && `+${more} more nearby`].filter(Boolean).join(" · ");
+  $("alert-icon").innerHTML = camSvg(c.kind, c);
+  $("alert-title").textContent = `${SPOKEN[c.kind]} ahead`;
+  $("alert-sub").textContent = sub;
+  $("alert-dist").textContent = fmtDist(d);
+  $("alert").hidden = false;
+  const sentence = `${SPOKEN[c.kind]} ahead, ${fmtDist(d, true)}.` + (limit ? ` Speed limit ${limit}.` : "") + (more > 0 ? ` ${more} more nearby.` : "");
+  $("alert-sr").textContent = sentence;
+  activeAlert = { c, at: Date.now() };
+  if (settings.chime) chime();
+  if (settings.voice) speak(sentence, settings.chime ? 450 : 0);
+  if (settings.vibrate && navigator.vibrate) navigator.vibrate([200, 100, 200]);
+}
+
+function speak(text, delay = 0) {
+  if (!("speechSynthesis" in window)) return;
+  setTimeout(() => {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-US";
+    speechSynthesis.speak(u);
+  }, delay);
+}
+function chime() {
+  if (!audioCtx) return;
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  const t = audioCtx.currentTime;
+  [[880, 0], [660, 0.18]].forEach(([freq, at]) => {
+    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t + at);
+    gain.gain.exponentialRampToValueAtTime(0.35, t + at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.16);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t + at); osc.stop(t + at + 0.18);
+  });
+}
+async function keepAwake() {
+  try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) { wakeLock = null; }
+}
+document.addEventListener("visibilitychange", () => { if (driving && document.visibilityState === "visible") keepAwake(); });
+
+function maybeFetchAround(lat, lon) {   // outside the LA snapshot, fetch live data as you go
+  if (snapBounds && snapBounds.pad(-0.02).contains([lat, lon])) return;
+  if (lastLiveCenter && distM(lat, lon, lastLiveCenter[0], lastLiveCenter[1]) < 3000) return;
+  lastLiveCenter = [lat, lon];
+  loadLive(L.latLngBounds([lat - 0.05, lon - 0.06], [lat + 0.05, lon + 0.06]), { quiet: true });
+}
+
+function syncVoiceButton() {
+  $("btn-voice").textContent = settings.voice ? "Voice on" : "Voice off";
+  $("btn-voice").setAttribute("aria-pressed", String(settings.voice));
+  $("set-voice").checked = settings.voice;
+}
+
+function startDrive() {
+  if (!navigator.geolocation) return note("This browser can't share your location, so drive mode can't run.");
+  // These must run inside the tap so phones allow sound and speech later.
+  try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch (e) {}
+  if (settings.voice) speak("Drive mode on.");
+  keepAwake();
+  driving = true; follow = true;
+  alerted.clear(); activeAlert = null;
+  document.body.classList.add("driving");
+  $("hud").hidden = false; $("alert").hidden = true; $("btn-recenter").hidden = true;
+  syncVoiceButton();
+  updateInset();
+  map.invalidateSize();
+  if (userPos) followView(16);
+  else map.setZoom(Math.max(map.getZoom(), 16));
+  updateHud();
+  watchId = navigator.geolocation.watchPosition(onFix, geoError, { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 });
+  $("btn-stop").focus();
+}
+function stopDrive() {
+  if (watchId != null) navigator.geolocation.clearWatch(watchId);
+  watchId = null; driving = false; activeAlert = null;
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  document.body.classList.remove("driving");
+  $("hud").hidden = true;
+  updateInset();
+  map.invalidateSize();
+  renderList();
+  $("btn-drive").focus();
+}
+$("btn-drive").addEventListener("click", () => {
+  if (recall("cam-safety-ok")) return startDrive();
+  $("safety").showModal();
 });
-let timer = null;
-$("auto").addEventListener("change", e => {
-  clearInterval(timer);
-  timer = e.target.checked ? setInterval(loadOSM, AUTO_REFRESH_MS) : null;
+$("safety-ok").addEventListener("click", () => { store("cam-safety-ok", true); $("safety").close(); startDrive(); });
+$("safety-cancel").addEventListener("click", () => $("safety").close());
+$("btn-stop").addEventListener("click", stopDrive);
+$("btn-voice").addEventListener("click", () => {
+  settings.voice = !settings.voice; saveSettings(); syncVoiceButton();
+  if (!settings.voice && "speechSynthesis" in window) speechSynthesis.cancel();
+});
+map.on("dragstart", () => { if (driving) { follow = false; $("btn-recenter").hidden = false; } });
+$("btn-recenter").addEventListener("click", () => {
+  follow = true; $("btn-recenter").hidden = true;
+  if (userPos) followView();
 });
 
-loadOSM();
-loadLADOT();
+updateInset();
+loadSnapshot();
 </script>
 </body>
 </html>
