@@ -1,4 +1,4 @@
-# LA Camera Watch
+# Metro Camera Watch - CA, NY
 
 A map of automated license plate readers (ALPR, such as Flock Safety) and speed cameras, with spoken alerts while you drive. It has saved data for the Los Angeles and New York City areas, and fetches live data anywhere else.
 

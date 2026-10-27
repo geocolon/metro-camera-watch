@@ -80,7 +80,7 @@ def to_kml(elements):
     kml = """<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
-  <name>LA Camera Watch</name>
+  <name>Metro Camera Watch - CA, NY</name>
   <description>Data (c) OpenStreetMap contributors, ODbL</description>
 {}
 {}
