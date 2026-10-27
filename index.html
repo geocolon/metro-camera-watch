@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>LA Camera Watch</title>
-<meta name="description" content="Live map of license plate readers (Flock/ALPR) and speed cameras in Los Angeles, with spoken alerts while you drive.">
+<meta name="description" content="Map of license plate readers (Flock/ALPR) and speed cameras in the Los Angeles and New York City areas, with spoken alerts while you drive.">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1f1f1f" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -16,10 +16,11 @@
 <!--
   LA Camera Watch: a map of ALPR (Flock etc.) and speed cameras, with drive mode alerts.
 
-  Data: the page loads data/cameras.json, a daily snapshot of the LA area built by
-  scripts/build_snapshot.py (OpenStreetMap via Overpass + LADOT's public ArcGIS
-  layers). "Refresh live data" asks Overpass for the current view, and browsing or
-  driving outside the snapshot area fetches live data automatically.
+  Data: data/regions.json lists daily regional snapshots (LA and NYC areas) built by
+  scripts/build_snapshot.py from DeFlock/OpenStreetMap, Overpass and LADOT's public
+  ArcGIS layers. Each region loads when you look there. "Refresh live data" asks
+  Overpass for the current view, and browsing or driving outside every region
+  fetches live data automatically.
 
   Run locally (tile servers block pages opened straight from disk):
       python3 -m http.server 8000      then open http://localhost:8000/
@@ -1117,6 +1118,8 @@ function clearPlace() {
   if (placeMarker) { map.removeLayer(placeMarker); placeMarker = null; }
   qInput.value = ""; $("q-clear").hidden = true;
   closeSuggestions();
+  const r = regions.find(r => r.loaded && r.bounds.intersects(map.getBounds()));
+  setStatus(r ? `${r.name}: ${countsText(r.counts)} · data from ${fmtDate(r.generated)}` : "");
 }
 
 qInput.addEventListener("input", () => {

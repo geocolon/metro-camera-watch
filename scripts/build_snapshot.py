@@ -12,7 +12,9 @@ Writes data/<region>.json for each region and data/regions.json, the list the
 page reads first. A region whose download fails keeps its previous file.
 
 Sources:
-  OpenStreetMap via Overpass (ODbL): ALPR and speed camera nodes
+  DeFlock's published OpenStreetMap extract (ODbL): ALPR nodes. It is a static
+    file on a CDN, so it works even when Overpass is overloaded.
+  OpenStreetMap via Overpass (ODbL): speed camera nodes (a small query, retried)
   LADOT Speed Safety System (public ArcGIS layers): LA camera sites and corridors
   (New York City doesn't publish its speed camera locations.)
 """
@@ -20,11 +22,12 @@ import json
 import math
 import os
 import sys
+import time
 import urllib.request
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cameras_to_kml import build_query, overpass  # noqa: E402
+from cameras_to_kml import overpass  # noqa: E402
 
 # bbox is south, west, north, east
 REGIONS = {
@@ -32,6 +35,8 @@ REGIONS = {
     # NYC's five boroughs, Yonkers and lower Westchester, Long Island to Montauk, and nearby New Jersey
     "ny": {"name": "New York City area", "bbox": (40.45, -74.35, 41.25, -71.80)},
 }
+# DeFlock splits the world into 20-degree tiles named by their south-west corner
+DEFLOCK_TILE = "https://cdn.deflock.me/regions/{lat}/{lon}.json"
 ARCGIS = "https://services.arcgis.com/G3nmNsarwQblLhip/arcgis/rest/services"
 LADOT_CAMERAS = ARCGIS + "/CameraSystemLabels_view/FeatureServer/0"
 LADOT_CORRIDORS = ARCGIS + "/ApprovedLocations_04012026_view/FeatureServer/0"
@@ -44,11 +49,14 @@ KEEP_TAGS = {
 }
 
 
-def get_geojson(layer):
-    url = layer + "/query?where=1%3D1&outFields=*&outSR=4326&f=geojson"
+def get_json(url, timeout=60):
     req = urllib.request.Request(url, headers={"User-Agent": "la-camera-watch"})
-    with urllib.request.urlopen(req, timeout=60) as res:
-        return json.load(res)["features"]
+    with urllib.request.urlopen(req, timeout=timeout) as res:
+        return json.load(res)
+
+
+def get_geojson(layer):
+    return get_json(layer + "/query?where=1%3D1&outFields=*&outSR=4326&f=geojson")["features"]
 
 
 def rings(geom):
@@ -88,14 +96,34 @@ def round_ring(ring):
     return [[round(x, 5), round(y, 5)] for x, y in ring]
 
 
-def osm_cameras(bbox):
-    osm = []
-    for el in overpass(build_query("{},{},{},{}".format(*bbox))):
-        tags = el.get("tags", {})
-        kind = "alpr" if tags.get("surveillance:type") == "ALPR" else "speed"
-        osm.append([el["id"], round(el["lat"], 6), round(el["lon"], 6), kind,
-                    {k: v for k, v in tags.items() if k in KEEP_TAGS}])
-    return sorted(osm)
+def camera(el, kind):
+    tags = el.get("tags", {})
+    return [el["id"], round(el["lat"], 6), round(el["lon"], 6), kind, {k: v for k, v in tags.items() if k in KEEP_TAGS}]
+
+
+def alpr_cameras(bbox):
+    s, w, n, e = bbox
+    floor20 = lambda v: int(math.floor(v / 20) * 20)
+    found = {}
+    for lat in range(floor20(s), floor20(n) + 1, 20):
+        for lon in range(floor20(w), floor20(e) + 1, 20):
+            for el in get_json(DEFLOCK_TILE.format(lat=lat, lon=lon), timeout=120):
+                if s <= el["lat"] <= n and w <= el["lon"] <= e:
+                    found[el["id"]] = camera(el, "alpr")
+    return list(found.values())
+
+
+def speed_cameras(bbox, attempts=3):
+    query = '[out:json][timeout:60];node["highway"="speed_camera"]({},{},{},{});out body;'.format(*bbox)
+    for attempt in range(1, attempts + 1):
+        try:
+            return [camera(el, "speed") for el in overpass(query)]
+        except Exception as e:
+            if attempt == attempts:
+                raise
+            wait = 30 * attempt
+            print("  Overpass busy ({}); retrying in {}s".format(e, wait), file=sys.stderr)
+            time.sleep(wait)
 
 
 def ladot_cameras():
@@ -120,20 +148,36 @@ def ladot_cameras():
     return city, corridors
 
 
+def previous(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
 def build(region_id):
     region = REGIONS[region_id]
-    print("{}: asking Overpass for cameras…".format(region["name"]))
+    path = os.path.join(DATA, region_id + ".json")
+    print("{}: plate readers from DeFlock…".format(region["name"]))
+    alpr = alpr_cameras(region["bbox"])
+    print("{}: speed cameras from Overpass…".format(region["name"]))
+    try:
+        speed = speed_cameras(region["bbox"])
+    except Exception as e:  # Overpass is down: keep the speed cameras we had (none yet for a new region)
+        old = previous(path)
+        speed = [c for c in old["osm"] if c[3] == "speed"] if old else []
+        print("  Overpass unavailable ({}); keeping {} saved speed cameras".format(e, len(speed)), file=sys.stderr)
     snapshot = {
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "bbox": region["bbox"],
-        "osm": osm_cameras(region["bbox"]),
+        "osm": sorted(alpr + speed),
         "city": [],
         "corridors": [],
     }
     if region.get("ladot"):
         print("{}: LADOT camera sites and corridors…".format(region["name"]))
         snapshot["city"], snapshot["corridors"] = ladot_cameras()
-    path = os.path.join(DATA, region_id + ".json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, separators=(",", ":"), ensure_ascii=False)
     n_alpr = sum(1 for c in snapshot["osm"] if c[3] == "alpr")

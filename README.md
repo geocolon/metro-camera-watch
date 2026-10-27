@@ -23,7 +23,7 @@ A map of automated license plate readers (ALPR, such as Flock Safety) and speed 
 ## How it works
 
 - `index.html` is a single static page built on [Leaflet](https://leafletjs.com) and [Leaflet.markercluster](https://github.com/Leaflet/Leaflet.markercluster). It has no backend.
-- It starts from saved regional snapshots built by `scripts/build_snapshot.py`. `data/regions.json` lists them, and each region's file (`data/la.json`, `data/ny.json`) loads only when you look at or search in that area. A GitHub Action (`.github/workflows/update-data.yml`) refreshes them every day. The free Overpass servers are often slow, so the snapshots keep the map fast and reliable.
+- It starts from saved regional snapshots built by `scripts/build_snapshot.py`. Plate readers come from [DeFlock's published OpenStreetMap extract](https://deflock.me), a static file that loads even when Overpass is overloaded; speed cameras come from Overpass. `data/regions.json` lists them, and each region's file (`data/la.json`, `data/ny.json`) loads only when you look at or search in that area. A GitHub Action (`.github/workflows/update-data.yml`) refreshes them every day. The free Overpass servers are often slow, so the snapshots keep the map fast and reliable.
   - **Los Angeles area:** OpenStreetMap cameras plus LADOT's official speed camera sites.
   - **New York City area** (the five boroughs, Yonkers and lower Westchester, Long Island and nearby New Jersey): OpenStreetMap cameras. NYC doesn't publish its speed camera locations, so only cameras that volunteers have mapped appear.
   - To add a region, add it to `REGIONS` in `scripts/build_snapshot.py`.

@@ -1,7 +1,7 @@
 {
   "name": "LA Camera Watch",
   "short_name": "Camera Watch",
-  "description": "Map of license plate readers and speed cameras in Los Angeles, with spoken alerts while you drive.",
+  "description": "Map of license plate readers and speed cameras in the Los Angeles and New York City areas, with spoken alerts while you drive.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

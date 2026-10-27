@@ -9,11 +9,28 @@
    -117.65
   ],
   "file": "data/la.json",
-  "generated": "2026-10-27T19:01:40Z",
+  "generated": "2026-10-27T19:54:48Z",
   "counts": {
-   "alpr": 4525,
+   "alpr": 4502,
    "speed": 10,
    "city": 125
+  }
+ },
+ {
+  "id": "ny",
+  "name": "New York City area",
+  "bbox": [
+   40.45,
+   -74.35,
+   41.25,
+   -71.8
+  ],
+  "file": "data/ny.json",
+  "generated": "2026-10-27T19:55:27Z",
+  "counts": {
+   "alpr": 3647,
+   "speed": 84,
+   "city": 0
   }
  }
 ]
