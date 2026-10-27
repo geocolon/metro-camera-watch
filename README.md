@@ -2,7 +2,7 @@
 
 A map of automated license plate readers (ALPR, such as Flock Safety) and speed cameras, with spoken alerts while you drive. It has saved data for the Los Angeles and New York City areas, and fetches live data anywhere else.
 
-**Live map:** https://geocolon.github.io/la-camera-watch/
+**Live map:** https://geocolon.github.io/metro-camera-watch/
 
 ## Features
 

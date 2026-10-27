@@ -39,7 +39,7 @@ def overpass(query):
     last_err = None
     for url in OVERPASS_ENDPOINTS:
         try:
-            req = urllib.request.Request(url, data=data, headers={"User-Agent": "la-camera-watch"})
+            req = urllib.request.Request(url, data=data, headers={"User-Agent": "metro-camera-watch"})
             with urllib.request.urlopen(req, timeout=180) as res:
                 result = json.load(res)
             # A busy server can answer 200 with a "remark" (timeout, out of memory) and no data.

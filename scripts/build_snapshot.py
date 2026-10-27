@@ -50,7 +50,7 @@ KEEP_TAGS = {
 
 
 def get_json(url, timeout=60):
-    req = urllib.request.Request(url, headers={"User-Agent": "la-camera-watch"})
+    req = urllib.request.Request(url, headers={"User-Agent": "metro-camera-watch"})
     with urllib.request.urlopen(req, timeout=timeout) as res:
         return json.load(res)
 
