@@ -985,17 +985,23 @@ function placeLabel(p) {
 async function geocode(text) {
   if (qCtrl) qCtrl.abort();
   qCtrl = new AbortController();
-  const c = map.getCenter();   // rank results near what you're looking at
-  const url = `${GEOCODER}?q=${encodeURIComponent(text)}&limit=6&lang=en&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}`;
-  const res = await fetch(url, { signal: qCtrl.signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const c = map.getCenter();
+  const base = `${GEOCODER}?q=${encodeURIComponent(text)}&limit=6&lang=en&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}`;
+  // Search within ~100 miles of the map first; Photon's location bias alone often ranks far-away places on top.
+  const region = [c.lng - 1.5, c.lat - 1.5, c.lng + 1.5, c.lat + 1.5].map(n => n.toFixed(3)).join(",");
+  const get = async (url) => {
+    const res = await fetch(url, { signal: qCtrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return (await res.json()).features;
+  };
+  let features = await get(`${base}&bbox=${region}`);
+  if (features.length < 3) features = features.concat(await get(base));   // nothing close: search everywhere
   const seen = new Set();
-  const results = (await res.json()).features.map(f => {
+  return features.map(f => {
     const { main, sub } = placeLabel(f.properties);
     const [lon, lat] = f.geometry.coordinates;
-    return { main, sub, lat, lon, far: distM(c.lat, c.lng, lat, lon) > 150000 };
-  }).filter(r => { const k = r.main + "|" + r.sub; return !seen.has(k) && seen.add(k); });
-  return results.filter(r => !r.far).concat(results.filter(r => r.far));   // nearby places first
+    return { main, sub, lat, lon };
+  }).filter(r => { const k = r.main + "|" + r.sub; return !seen.has(k) && seen.add(k); }).slice(0, 6);
 }
 function setActive(i) {
   qActive = i;
