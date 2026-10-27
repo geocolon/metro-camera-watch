@@ -142,6 +142,7 @@ const LADOT_WEBMAP_ID = "1782595f9631429696a3d269e4c9aea5";
 const LADOT_PAGE = "https://ladot.lacity.gov/speed-safety-system";
 const MIN_ZOOM_FOR_QUERY = 11;        // keep queries small and polite
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
+const REQUEST_TIMEOUT_MS = 30 * 1000; // per mirror, then try the next one
 const START = { lat: 34.05, lon: -118.30, zoom: 12 };
 
 // ---------- helpers ----------
@@ -184,7 +185,7 @@ function cameraMarker(lat, lon, color, direction) {
 function buildQuery(b) {
   // Overpass bbox order is south,west,north,east
   const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(n => n.toFixed(5)).join(",");
-  return `[out:json][timeout:60];
+  return `[out:json][timeout:25];
 (
   node["surveillance:type"="ALPR"](${bbox});
   node["highway"="speed_camera"](${bbox});
@@ -195,11 +196,21 @@ out body;`;
 async function overpass(query) {
   let lastErr;
   for (const url of OVERPASS_ENDPOINTS) {
+    const host = new URL(url).host;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);   // don't hang on a stuck mirror
     try {
-      const res = await fetch(url, { method: "POST", body: new URLSearchParams({ data: query }) });
-      if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
-      return (await res.json()).elements || [];
-    } catch (e) { lastErr = e; }   // try the next mirror
+      const res = await fetch(url, { method: "POST", body: new URLSearchParams({ data: query }), signal: ctrl.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status} from ${host}`);
+      const json = await res.json();
+      // A busy server can answer 200 with a "remark" (timeout, out of memory) and no data.
+      if (json.remark && !(json.elements || []).length) throw new Error(`${host}: ${json.remark}`);
+      return json.elements || [];
+    } catch (e) {
+      lastErr = e.name === "AbortError" ? new Error(`${host} timed out`) : e;   // try the next mirror
+    } finally {
+      clearTimeout(timer);
+    }
   }
   throw lastErr;
 }

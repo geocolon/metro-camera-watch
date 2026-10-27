@@ -41,7 +41,11 @@ def overpass(query):
         try:
             req = urllib.request.Request(url, data=data, headers={"User-Agent": "la-camera-watch"})
             with urllib.request.urlopen(req, timeout=180) as res:
-                return json.load(res).get("elements", [])
+                result = json.load(res)
+            # A busy server can answer 200 with a "remark" (timeout, out of memory) and no data.
+            if result.get("remark") and not result.get("elements"):
+                raise RuntimeError(result["remark"])
+            return result.get("elements", [])
         except Exception as e:  # try the next mirror
             last_err = e
             print("  {} failed: {}".format(url, e), file=sys.stderr)
