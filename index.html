@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LA Camera Watch</title>
+<!--
+  LA Camera Watch: a live map of ALPR (Flock etc.) and speed cameras.
+
+  Every time you load the page or press "Refresh this area", it asks the
+  OpenStreetMap Overpass API for cameras inside the visible map, so you
+  always see the latest community edits. It also tries to load LADOT's
+  official 125-site speed camera layer from the city's public ArcGIS map.
+
+  Run it from a local web server (OSM's tile servers block pages opened
+  straight from disk):
+      cd folder-with-this-file
+      python3 -m http.server 8000
+  then open http://localhost:8000/
+
+  Open-source pieces:
+    Leaflet ............ https://leafletjs.com (BSD-2)
+    OSM data / tiles ... (c) OpenStreetMap contributors, ODbL
+    Overpass API ....... https://wiki.openstreetmap.org/wiki/Overpass_API
+-->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;600;700&display=swap">
+<style>
+  /* Layout: full-screen map with a control rail on top (wide) or a bottom sheet (phone). */
+  :root {
+    --bg: #f3f5f7;
+    --panel: #ffffff;
+    --ink: #17202a;
+    --muted: #5b6672;
+    --line: #d8dee5;
+    --alpr: #d1284a;     /* license-plate readers */
+    --speed: #e08a00;    /* OSM speed cameras */
+    --ladot: #1f6fd1;    /* official LADOT sites */
+    --ok: #1f8a4c;
+    --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-data: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1419; --panel: #182029; --ink: #e6ebf0; --muted: #98a4b0; --line: #2a3542;
+      --alpr: #ff5c7a; --speed: #ffb238; --ladot: #5aa2ff; --ok: #4cc17f; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1419; --panel: #182029; --ink: #e6ebf0; --muted: #98a4b0; --line: #2a3542;
+    --alpr: #ff5c7a; --speed: #ffb238; --ladot: #5aa2ff; --ok: #4cc17f; color-scheme: dark;
+  }
+
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 14px/1.45 var(--font-ui);
+    display: flex; flex-direction: column;
+  }
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    padding-block: 10px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+  }
+  h1 { font-size: 17px; margin: 0; letter-spacing: .01em; text-wrap: balance; }
+  .layers, .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px 4px 8px;
+    cursor: pointer; user-select: none; background: var(--bg);
+  }
+  .chip input { margin: 0; accent-color: var(--ink); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .count { font-family: var(--font-data); font-variant-numeric: tabular-nums; color: var(--muted); }
+  button {
+    font: 600 13px var(--font-ui); color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 11px; cursor: pointer;
+  }
+  button.primary { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  button:focus-visible, .chip:focus-within { outline: 2px solid var(--ladot); outline-offset: 2px; }
+  button:disabled { opacity: .55; cursor: progress; }
+  .status {
+    margin-left: auto; font-family: var(--font-data); font-size: 12px; color: var(--muted);
+    font-variant-numeric: tabular-nums; min-width: 0;
+  }
+  .status.live::before {
+    content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ok); margin-right: 6px; vertical-align: 1px;
+  }
+  #map { flex: 1; min-height: 0; background: var(--bg); }
+  .leaflet-popup-content { font: 13px/1.4 var(--font-ui); min-width: 200px; }
+  .leaflet-popup-content h3 { margin: 0 0 6px; font-size: 14px; }
+  .tags { font-family: var(--font-data); font-size: 11px; max-height: 160px; overflow: auto; color: #444; }
+  .note {
+    position: absolute; z-index: 500; left: 50%; transform: translateX(-50%);
+    bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; padding: 8px 12px; max-width: min(520px, calc(100% - 32px));
+    box-shadow: 0 4px 18px rgba(0,0,0,.15); font-size: 13px;
+  }
+  .wrap { position: relative; flex: 1; display: flex; min-height: 0; }
+  @media (max-width: 640px) {
+    .status { margin-left: 0; width: 100%; }
+    h1 { font-size: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>LA Camera Watch</h1>
+  <div class="layers" role="group" aria-label="Layers">
+    <label class="chip"><input type="checkbox" id="lyr-alpr" checked><span class="dot" style="background:var(--alpr)"></span>ALPR / Flock <span class="count" id="n-alpr">0</span></label>
+    <label class="chip"><input type="checkbox" id="lyr-speed" checked><span class="dot" style="background:var(--speed)"></span>Speed (OSM) <span class="count" id="n-speed">0</span></label>
+    <label class="chip"><input type="checkbox" id="lyr-ladot" checked><span class="dot" style="background:var(--ladot)"></span>LADOT official <span class="count" id="n-ladot">0</span></label>
+  </div>
+  <div class="actions">
+    <button class="primary" id="btn-refresh">Refresh this area</button>
+    <button id="btn-locate">Near me</button>
+    <label class="chip"><input type="checkbox" id="auto"> Auto-refresh 5 min</label>
+  </div>
+  <div class="status" id="status">Loading…</div>
+</header>
+<div class="wrap">
+  <div id="map"></div>
+  <div class="note" id="note" hidden></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+// ---------- configuration ----------
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+];
+// LADOT's public ArcGIS web map (linked from ladot.lacity.gov/speed-safety-system)
+const LADOT_WEBMAP_ID = "1782595f9631429696a3d269e4c9aea5";
+const LADOT_PAGE = "https://ladot.lacity.gov/speed-safety-system";
+const MIN_ZOOM_FOR_QUERY = 11;        // keep queries small and polite
+const AUTO_REFRESH_MS = 5 * 60 * 1000;
+const START = { lat: 34.05, lon: -118.30, zoom: 12 };
+
+// ---------- helpers ----------
+const $ = (id) => document.getElementById(id);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+function setStatus(text, live = false) { const el = $("status"); el.textContent = text; el.classList.toggle("live", live); }
+function note(text) { const el = $("note"); el.hidden = !text; if (text) el.innerHTML = text; }
+function store(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
+function recall(key) { try { return JSON.parse(localStorage.getItem(key)); } catch (e) { return null; } }
+
+// ---------- map ----------
+const saved = recall("cam-view");
+const map = L.map("map", { zoomControl: true }).setView(
+  saved ? [saved.lat, saved.lon] : [START.lat, START.lon], saved ? saved.zoom : START.zoom);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+map.on("moveend", () => { const c = map.getCenter(); store("cam-view", { lat: c.lat, lon: c.lng, zoom: map.getZoom() }); });
+
+const layers = { alpr: L.layerGroup().addTo(map), speed: L.layerGroup().addTo(map), ladot: L.layerGroup().addTo(map) };
+for (const key of Object.keys(layers)) {
+  $("lyr-" + key).addEventListener("change", e => e.target.checked ? layers[key].addTo(map) : map.removeLayer(layers[key]));
+}
+
+// A dot plus, when OSM has a `direction` tag, a short line showing where the camera points.
+function cameraMarker(lat, lon, color, direction) {
+  const group = L.layerGroup();
+  const deg = parseFloat(direction);
+  if (!Number.isNaN(deg)) {
+    const rad = deg * Math.PI / 180, len = 0.0006;   // roughly 60 m
+    const tip = [lat + len * Math.cos(rad), lon + len * Math.sin(rad) / Math.cos(lat * Math.PI / 180)];
+    L.polyline([[lat, lon], tip], { color, weight: 3, opacity: .8 }).addTo(group);
+  }
+  return { group, dot: L.circleMarker([lat, lon], { radius: 7, color: "#fff", weight: 2, fillColor: color, fillOpacity: 1 }).addTo(group) };
+}
+
+// ---------- OpenStreetMap via Overpass ----------
+function buildQuery(b) {
+  // Overpass bbox order is south,west,north,east
+  const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(n => n.toFixed(5)).join(",");
+  return `[out:json][timeout:60];
+(
+  node["surveillance:type"="ALPR"](${bbox});
+  node["highway"="speed_camera"](${bbox});
+);
+out body;`;
+}
+
+async function overpass(query) {
+  let lastErr;
+  for (const url of OVERPASS_ENDPOINTS) {
+    try {
+      const res = await fetch(url, { method: "POST", body: new URLSearchParams({ data: query }) });
+      if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
+      return (await res.json()).elements || [];
+    } catch (e) { lastErr = e; }   // try the next mirror
+  }
+  throw lastErr;
+}
+
+async function loadOSM() {
+  if (map.getZoom() < MIN_ZOOM_FOR_QUERY) {
+    note("Zoom in a bit (city level or closer) and press <b>Refresh this area</b>. Big areas overload the free Overpass servers.");
+    return;
+  }
+  note("");
+  $("btn-refresh").disabled = true;
+  setStatus("Asking OpenStreetMap…");
+  try {
+    const elements = await overpass(buildQuery(map.getBounds()));
+    layers.alpr.clearLayers(); layers.speed.clearLayers();
+    let nA = 0, nS = 0;
+    for (const el of elements) {
+      const t = el.tags || {};
+      const isALPR = t["surveillance:type"] === "ALPR";
+      const color = isALPR ? css("--alpr") : css("--speed");
+      const title = isALPR ? `License plate reader (${t.manufacturer || t.brand || "maker unknown"})` : "Speed camera";
+      const { group, dot } = cameraMarker(el.lat, el.lon, color, t["camera:direction"] || t.direction);
+      const rows = Object.entries(t).sort().map(([k, v]) => `${esc(k)} = ${esc(v)}`).join("<br>");
+      dot.bindPopup(`<h3>${esc(title)}</h3><div class="tags">${rows}</div>
+        <p><a href="https://www.openstreetmap.org/node/${el.id}" target="_blank" rel="noopener">View or fix on OpenStreetMap</a></p>`);
+      group.addTo(isALPR ? layers.alpr : layers.speed);
+      isALPR ? nA++ : nS++;
+    }
+    $("n-alpr").textContent = nA; $("n-speed").textContent = nS;
+    setStatus(`Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`, true);
+    if (!elements.length) note("No mapped cameras in this view yet. Spot one? Add it with the DeFlock app.");
+  } catch (e) {
+    setStatus("OpenStreetMap request failed");
+    note(`Couldn't reach Overpass (${esc(e.message)}). The free servers get busy; wait a minute and press <b>Refresh this area</b>.`);
+  } finally {
+    $("btn-refresh").disabled = false;
+  }
+}
+
+// ---------- LADOT official speed camera sites (ArcGIS) ----------
+async function loadLADOT() {
+  try {
+    const item = await (await fetch(`https://www.arcgis.com/sharing/rest/content/items/${LADOT_WEBMAP_ID}/data?f=json`)).json();
+    const ops = item.operationalLayers || [];
+    let n = 0;
+    for (const op of ops) {
+      if (!op.url || !/FeatureServer|MapServer/.test(op.url)) continue;
+      const base = /\/\d+$/.test(op.url) ? op.url : op.url + "/0";
+      const q = `${base}/query?where=1%3D1&outFields=*&outSR=4326&f=geojson`;
+      const gj = await (await fetch(q)).json();
+      L.geoJSON(gj, {
+        pointToLayer: (f, latlng) => L.circleMarker(latlng, { radius: 6, color: "#fff", weight: 2, fillColor: css("--ladot"), fillOpacity: 1 }),
+        style: () => ({ color: css("--ladot"), weight: 4, opacity: .85 }),
+        onEachFeature: (f, layer) => {
+          n++;
+          const rows = Object.entries(f.properties || {}).filter(([, v]) => v !== null && v !== "")
+            .map(([k, v]) => `${esc(k)}: ${esc(v)}`).join("<br>");
+          layer.bindPopup(`<h3>LADOT speed safety site</h3><div class="tags">${rows}</div>
+            <p><a href="${LADOT_PAGE}" target="_blank" rel="noopener">LADOT program page</a></p>`);
+        },
+      }).addTo(layers.ladot);
+    }
+    $("n-ladot").textContent = n;
+    if (!n) throw new Error("no features");
+  } catch (e) {
+    $("n-ladot").textContent = "–";
+    console.warn("LADOT layer unavailable:", e);
+    note(`The LADOT layer didn't load. See the official list at <a href="${LADOT_PAGE}" target="_blank" rel="noopener">ladot.lacity.gov</a>.`);
+  }
+}
+
+// ---------- controls ----------
+$("btn-refresh").addEventListener("click", loadOSM);
+$("btn-locate").addEventListener("click", () => {
+  if (!navigator.geolocation) return note("This browser can't share your location.");
+  navigator.geolocation.getCurrentPosition(
+    p => { map.setView([p.coords.latitude, p.coords.longitude], 14); setTimeout(loadOSM, 300); },
+    () => note("Location was blocked. Pan the map by hand, then press <b>Refresh this area</b>."));
+});
+let timer = null;
+$("auto").addEventListener("change", e => {
+  clearInterval(timer);
+  timer = e.target.checked ? setInterval(loadOSM, AUTO_REFRESH_MS) : null;
+});
+
+loadOSM();
+loadLADOT();
+</script>
+</body>
+</html>

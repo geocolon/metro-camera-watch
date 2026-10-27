@@ -1,0 +1,1 @@
+# cameras_to_kml.py uses only the Python standard library (3.7+).
