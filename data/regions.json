@@ -9,7 +9,7 @@
    -117.65
   ],
   "file": "data/la.json",
-  "generated": "2026-11-18T19:29:34Z",
+  "generated": "2026-11-19T19:33:53Z",
   "counts": {
    "alpr": 4502,
    "speed": 65,
@@ -26,10 +26,10 @@
    -71.8
   ],
   "file": "data/ny.json",
-  "generated": "2026-11-18T19:32:08Z",
+  "generated": "2026-11-19T19:34:31Z",
   "counts": {
    "alpr": 3738,
-   "speed": 83,
+   "speed": 84,
    "city": 0
   }
  }
